@@ -1,15 +1,15 @@
-# Version --- Added optical-thermal infrared questions
+# -*- coding: utf-8 -*-
+# This tool is designed for annotating optical and thermal infrared images.
 
 import json
 import sys
 import os
-
 import random
 import math
 import numpy as np
-import cv2
+import cv2 # OpenCV for image processing and display for distance/area measurement
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import Qt, QMimeDatabase
+from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
@@ -20,567 +20,218 @@ from PyQt5.QtWidgets import (
     QLineEdit,
     QComboBox,
     QTextEdit,
+    QScrollArea, # Added for scrollable annotation panel
+    QVBoxLayout, # Added for layout within scroll area
 )
 
-
+# --- Helper Functions for Geometric Calculations ---
 def coss_multi(v1, v2):
-
+    """Calculates the 2D cross product of two vectors."""
     return v1[0] * v2[1] - v1[1] * v2[0]
 
-
 def polygon_area(polygon):
-
+    """
+    Calculates the area of a polygon given its vertices.
+    Args:
+        polygon (np.array): A NumPy array of shape (n, 2) representing n vertices.
+    Returns:
+        float: The area of the polygon.
+    """
     n = len(polygon)
     if n < 3:
-        return 0
+        return 0 # A polygon needs at least 3 vertices
     vectors = np.zeros((n, 2))
-    for i in range(0, n):
-        vectors[i, :] = polygon[i, :] - polygon[0, :]
+    for i in range(n):
+        vectors[i, :] = polygon[i, :] - polygon[0, :] # Vectors relative to the first vertex
     area = 0
     for i in range(1, n):
-        area = area + coss_multi(vectors[i - 1, :], vectors[i, :]) / 2
+        area += coss_multi(vectors[i - 1, :], vectors[i, :]) / 2
     return area
 
-
-class img:
-    def __init__(self, path):
-        self.path = path
-        self.img = cv2.imread(self.path)
-        self.coordinate_d = []
-        self.coordinate_a = []
-        self.count_a = 0
-        self.count_d = 0
-
-    def event_d(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            self.coordinate_d.append([x, y])
-            cv2.circle(self.img, (x, y), 1, (0, 255, 0), thickness=-1)
-            cv2.imshow("Distance", self.img)
-
-        if event == cv2.EVENT_MBUTTONDOWN:
-            self.count_d = self.count_d + 1
-            if len(self.coordinate_d) >= 2:
-                sm = math.pow(
-                    (self.coordinate_d[-1][0] - self.coordinate_d[-2][0]), 2
-                ) + math.pow((self.coordinate_d[-1][1] - self.coordinate_d[-2][1]), 2)
-                distance = math.pow(sm, 0.5)
-            else:
-                distance = 0
-            cv2.putText(
-                self.img,
-                "Distance_%d:%d" % (self.count_d, distance),
-                (120, 70 + self.count_d * 20),
-                cv2.FONT_HERSHEY_PLAIN,
-                1.0,
-                (0, 255, 230),
-                thickness=1,
-            )
-            cv2.imshow("Distance", self.img)
-
-    def get_dis(self):
-        self.img = cv2.imread(self.path)
-        cv2.namedWindow("Distance", cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback("Distance", self.event_d)
-        cv2.imshow("Distance", self.img)
-        cv2.waitKey(0)
-
-    def event_a(self, event, x, y, flags, param):
-
-        if event == cv2.EVENT_LBUTTONDOWN:
-
-            self.coordinate_a.append([x, y])
-
-            cv2.circle(self.img, (x, y), 1, (0, 255, 0), thickness=-1)
-            # cv2.putText(self.img, xy, (x, y), cv2.FONT_HERSHEY_PLAIN,0.9, (0, 255, 0), thickness=1)
-            cv2.imshow("Area", self.img)
-
-        if event == cv2.EVENT_MBUTTONDOWN:
-            self.count_a = self.count_a + 1
-            polygon = np.array(self.coordinate_a)
-            Area = -1 * polygon_area(polygon)
-            cv2.putText(
-                self.img,
-                "Area_%d:%d" % (self.count_a, Area),
-                (120, 70 + self.count_a * 20),
-                cv2.FONT_HERSHEY_PLAIN,
-                1.0,
-                (0, 255, 230),
-                thickness=1,
-            )
-
-            cv2.imshow("Area", self.img)
-            self.coordinate_a = []
-
-    def get_area(self):
-        self.img = cv2.imread(self.path)
-        cv2.namedWindow("Area", cv2.WINDOW_NORMAL)
-        cv2.setMouseCallback("Area", self.event_a)
-        cv2.imshow("Area", self.img)
-        cv2.waitKey(0)
-
-
-def get_img_paths(dir, extensions=(".jpg", ".png", ".jpeg")):
+# --- Image Measurement Class (using OpenCV) ---
+class ImageMeasurement:
     """
-    :param dir: folder with files
-    :param extensions: tuple with file endings. e.g. ('.jpg', '.png'). Files with these endings will be added to img_paths
-    :return: list of all filenames
+    Handles interactive distance and area measurement on an image using OpenCV.
+    """
+    def __init__(self, image_path):
+        self.path = image_path
+        self.img_original = cv2.imread(self.path) # Load the original image
+        self.img_display = self.img_original.copy() # Create a copy for drawing
+        self.coordinates_distance = [] # Stores points for distance measurement
+        self.coordinates_area = []     # Stores points for area measurement (polygon vertices)
+        self.distance_count = 0
+        self.area_count = 0
+
+    def _distance_mouse_event(self, event, x, y, flags, param):
+        """Mouse callback function for distance measurement."""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.coordinates_distance.append([x, y])
+            cv2.circle(self.img_display, (x, y), 3, (0, 255, 0), thickness=-1) # Draw a point
+            if len(self.coordinates_distance) % 2 == 0 and len(self.coordinates_distance) >= 2:
+                # Draw line between the last two points
+                p1 = tuple(self.coordinates_distance[-2])
+                p2 = tuple(self.coordinates_distance[-1])
+                cv2.line(self.img_display, p1, p2, (255, 0, 0), 2)
+            cv2.imshow("Measure Distance", self.img_display)
+
+        elif event == cv2.EVENT_MBUTTONDOWN: # Middle mouse button to calculate and display distance
+            if len(self.coordinates_distance) >= 2:
+                self.distance_count += 1
+                p1 = self.coordinates_distance[-2]
+                p2 = self.coordinates_distance[-1]
+                distance = math.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+                cv2.putText(
+                    self.img_display,
+                    f"Distance_{self.distance_count}: {distance:.2f}",
+                    (10, 30 + self.distance_count * 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    thickness=2,
+                )
+                cv2.imshow("Measure Distance", self.img_display)
+                # self.coordinates_distance = [] # Optional: Clear points after measurement
+
+    def measure_distance(self):
+        """Opens an OpenCV window to interactively measure distances."""
+        self.img_display = self.img_original.copy() # Reset display image
+        self.coordinates_distance = []
+        cv2.namedWindow("Measure Distance", cv2.WINDOW_AUTOSIZE) # Or WINDOW_NORMAL for resizable
+        cv2.setMouseCallback("Measure Distance", self._distance_mouse_event)
+        cv2.imshow("Measure Distance", self.img_display)
+        cv2.waitKey(0) # Wait until a key is pressed
+        cv2.destroyWindow("Measure Distance")
+
+    def _area_mouse_event(self, event, x, y, flags, param):
+        """Mouse callback function for area measurement."""
+        if event == cv2.EVENT_LBUTTONDOWN:
+            self.coordinates_area.append([x, y])
+            cv2.circle(self.img_display, (x, y), 3, (0, 255, 0), thickness=-1)
+            if len(self.coordinates_area) > 1:
+                # Draw line to the previous point to form the polygon
+                cv2.line(self.img_display, tuple(self.coordinates_area[-2]), tuple(self.coordinates_area[-1]), (255, 0, 0), 2)
+            cv2.imshow("Measure Area", self.img_display)
+
+        elif event == cv2.EVENT_MBUTTONDOWN: # Middle mouse button to calculate and display area
+            if len(self.coordinates_area) >= 3: # Need at least 3 points for an area
+                self.area_count += 1
+                polygon = np.array(self.coordinates_area)
+                area_val = abs(polygon_area(polygon)) # Use abs for positive area
+                # Draw the completed polygon (optional, can make it messy)
+                # cv2.polylines(self.img_display, [polygon.astype(np.int32)], isClosed=True, color=(0,0,255), thickness=2)
+                cv2.putText(
+                    self.img_display,
+                    f"Area_{self.area_count}: {area_val:.2f}",
+                    (10, 30 + self.area_count * 20),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 0, 255),
+                    thickness=2,
+                )
+                cv2.imshow("Measure Area", self.img_display)
+                self.coordinates_area = [] # Clear points for the next area measurement
+
+    def measure_area(self):
+        """Opens an OpenCV window to interactively measure areas (polygons)."""
+        self.img_display = self.img_original.copy() # Reset display image
+        self.coordinates_area = []
+        cv2.namedWindow("Measure Area", cv2.WINDOW_AUTOSIZE)
+        cv2.setMouseCallback("Measure Area", self._area_mouse_event)
+        cv2.imshow("Measure Area", self.img_display)
+        cv2.waitKey(0)
+        cv2.destroyWindow("Measure Area")
+
+# --- Utility Function to Get Image Paths ---
+def get_img_paths(directory, extensions=(".jpg", ".png", ".jpeg", ".bmp", ".tiff")):
+    """
+    Retrieves all image file paths and names from a given directory.
+    Args:
+        directory (str): The path to the folder containing images.
+        extensions (tuple): A tuple of valid image file extensions.
+    Returns:
+        tuple: (list of full image paths, list of image filenames)
     """
     img_paths = []
-    img_name = []
+    img_names = []
+    if not os.path.isdir(directory):
+        print(f"Warning: Directory not found: {directory}")
+        return img_paths, img_names
 
-    for filename in os.listdir(dir):
+    for filename in sorted(os.listdir(directory)): # Sort to ensure consistent order
         if filename.lower().endswith(extensions):
-            img_paths.append(os.path.join(dir, filename))
-            img_name.append(filename)
+            img_paths.append(os.path.join(directory, filename))
+            img_names.append(filename)
+    return img_paths, img_names
 
-    return img_paths, img_name
-
-
-class Annotation_window(QWidget):
+# --- Main Annotation Window Class ---
+class AnnotationWindow(QWidget):
     def __init__(self):
         super().__init__()
 
-        # Define variables to store important data
-        # Define folder path storage locations
-        self.selected_folder_rgb = ""
-        self.selected_folder_tir = ""
-        self.save_folder = ""  # Folder to store annotation files
+        # --- Paths and Image Data ---
+        self.selected_folder_rgb = ""       # Path to the OPT (optical/RGB) image folder
+        self.selected_folder_tir = ""       # Path to the THE (thermal infrared) image folder
+        self.save_folder = ""               # Path to the folder where annotation files will be saved
 
-        # Absolute paths of image files
-        self.img_paths_rgb = []
-        self.img_paths_tir = []
-        # List of image file names
-        self.rgb_name = []
-        self.tir_name = []
-        self.num_rgb = 0  # Total number of images in folder
-        self.num_tir = 0
-        self.counter = 0  # Current image index
+        self.img_paths_rgb = []             # List of full paths to RGB images
+        self.img_paths_tir = []             # List of full paths to TIR images
+        self.rgb_names = []                 # List of RGB image filenames
+        self.tir_names = []                 # List of TIR image filenames
 
-        # Store total data, initialize when loading annotation file
-        # Store total image annotation data {img_name:{q_id:[qst,ans],q_id:[qst,ans],...},tir2:{q_id:[qst,ans],q_id:[qst,ans],...},...}
-        self.annotation_dict = {}
+        self.num_rgb_images = 0             # Total number of RGB images
+        self.num_tir_images = 0             # Total number of TIR images
+        self.current_image_index = 0        # Index of the currently displayed image pair
 
-        self.attribution_dict = ({})  # Store total image attributes {img_name:{attribute1:,attribute2:,...}}
+        # --- Annotation Data Storage ---
+        # self.annotation_dict = {}         # REMOVED: Was for storing Q&A pairs.
+        self.attribution_dict = {}          # Stores image attributes: {img_name: {attribute1: value, ...}, ...}
+                                            # Also stores a "counter" key for resuming annotation.
 
-        # Must update when changing images, initialize when changing images
-        # Store current image annotation questions {img_name:[qst,ans],q_id:[qst,ans],...}
-        self.current_qst_dict = {}
+        self.current_image_attributes = {}  # Attributes for the currently displayed image: {attribute1: value, ...}
+        self.current_rgb_name = ""          # Filename of the current RGB image
+        self.current_tir_name = ""          # Filename of the current TIR image
 
-        self.current_attri_dict = {}  # Store current attributes {attribute1:,attribute2:,...}
+        # --- UI State and Helper Variables ---
+        self.allow_modification = True      # Flag to enable/disable modification of annotation UI elements (prevents loops)
+        self.current_landcover_for_delete = "None" # Tracks the LandCover class for targeted deletion in PresContain
+        self.current_traffic_landcover_for_delete = "None"  # For Traffic category
+        self.current_residential_landcover_for_delete = "None" # For Residential category
 
-        self.current_tir_name = ""  # Store current image name
-        self.current_rgb_name = ""
 
-        self.flag = True  # When flag is true, annotation content can be modified
-
-        # When modifying landcover, only delete current landcover, not all landcovers
-        self.current_landcover = "None"
-
-        self.current_traffic_landcover_subset = "None"
-        self.current_residential_landcover_subset = "None"
-
-        # Dictionary
-        # self.object_dict=['dog','cat','plane','house','twon'] # Object dictionary
-
-        # Set window size and display widgets
-        # Window size and title
-        self.title = "VQA (Visual Question Answering) Image Annotation Tool"
-        self.left = 200
-        self.top = 100
-        self.width = 1580
-        self.height = 770
-        # Image display area size
+        # --- UI Dimensions and Titles ---
+        self.setWindowTitle("Optical-Thermal Image Annotation Tool")
+        self.setGeometry(200, 100, 1580, 770) # left, top, width, height
         self.img_panel_width = 450
         self.img_panel_height = 450
 
-        # Residential area problem answers
-        self.residential_ans_landcover = QtWidgets.QComboBox(self)
-        self.residential_ans_object = QtWidgets.QComboBox(self)
-        self.residential_ans_number = QtWidgets.QComboBox(self)
-        self.residential_ans_location = QtWidgets.QComboBox(self)
-        self.residential_ans_better = QtWidgets.QComboBox(self)
-        self.submit_residential = QtWidgets.QPushButton("Confirm", self)
-        self.residential_list = [
-            self.residential_ans_landcover,
-            self.residential_ans_object,
-            self.residential_ans_number,
-            self.residential_ans_location,
-            self.residential_ans_better,
-        ]
-        self.residential_landcover_list = [
-            "living environment",
-            "construction type",
-        ]
-        self.residential_object_list = [
-            # Living environment
-            "recreational area",
-            "commercial area",
-            "construction area",
-            "river",
-            "lake",
-            "linear walkway",
-            "curved walkway",
-            "no visible walkway",
-            # Buildings
-            "low-rise residential building",
-            "high-rise residential building",
-            "low-rise non-residential building",
-            "high-rise non-residential building",
-        ]
-        self.RA2ObjList = {
-            "living environment": [
-                "Object",
-                "recreational area",
-                "commercial area",
-                "construction area",
-                "river",
-                "lake",
-                "linear walkway",
-                "curved walkway",
-                "no visible walkway",
-            ],
-            "construction type": [
-                "Object",
-                "low-rise residential building",
-                "high-rise residential building",
-                "low-rise non-residential building",
-                "high-rise non-residential building",
-            ],
-            "LandCover Class": ["Object Class"],
+        # --- Data Structures for Annotation Options (Dropdowns, etc.) ---
+        # These dictionaries map primary categories to their sub-categories/objects.
+        # Used to dynamically populate QComboBoxes.
+        self.RA2ObjList = { # Residential Area to Object List
+            "living environment": ["Object", "recreational area", "commercial area", "construction area", "river", "lake", "linear walkway", "curved walkway", "no visible walkway"],
+            "construction type": ["Object", "low-rise residential building", "high-rise residential building", "low-rise non-residential building", "high-rise non-residential building"],
+            "LandCover Class": ["Object Class"], # Default/placeholder
         }
-
-        #  self.RA2ObjList = {
-        #     "living environment": ["recreational area","commercial area","construction area","river","lake","linear walkway","curved walkway","no visible walkway"],
-        #     "construction type": ["low-rise residential building","high-rise residential building","low-rise non-residential building","high-rise non-residential building"]}
-
-        # Traffic problem answers
-        self.traffic_ans_landcover = QtWidgets.QComboBox(self)
-        self.traffic_ans_object = QtWidgets.QComboBox(self)
-        self.traffic_ans_number = QtWidgets.QComboBox(self)
-        self.traffic_ans_location = QtWidgets.QComboBox(self)
-        self.traffic_ans_better = QtWidgets.QComboBox(self)
-        self.submit_traffic = QtWidgets.QPushButton("Confirm", self)
-        self.traffic_list = [
-            self.traffic_ans_landcover,
-            self.traffic_ans_object,
-            self.traffic_ans_number,
-            self.traffic_ans_location,
-            self.traffic_ans_better,
-        ]
-        self.traffic_landcover_list = [
-            "road type",
-            "vehical",
-            "pedestrian",
-            "road facility",
-            "road condition",
-            "vehicle traffic violation",
-            "pedestrian traffic violation",
-            "vehicle behavior",
-            "pedestrian behavior",
-        ]
-        self.traffic_landcover_list = [
-            "road type",
-            "vehical",
-            "pedestrian",
-            "road facility",
-            "road condition",
-            "vehicle traffic violation",
-            "non-motor vehicle violation",
-            "pedestrian traffic violation",
-            "vehicle behavior",
-            "non-motor vehicle behavior",
-            "pedestrian behavior",
-            "abnormal traffic situation",
-            "traffic participant interaction"
-        ]
-        self.traffic_object_list = [
-            # Road types
-            "main city road",
-            "street",
-            "quick road",
-            "residential street",
-            "alley",
-            "intersection",
-            "lane merge",
-            "pedestrian crossing",
-            "bridge",
-            "non-motorized road",
-            "unpaved road",
-            "bus lane",
-            "gridline",
-            "overhead walkway",
-            "other paved road",
-            # Vehicle categories
-            "car",
-            "large vehicle",
-            "other vehicle",
-            # Pedestrian categories
-            "single pedestrian",
-            "pedestrian group",
-            # Road facilities
-            "motor vehicle parking spot",
-            "non-motorised parking spot",
-            "road divider",
-            # Road conditions
-            "normal pavement",
-            "damaged pavement",
-            "road construction",
-            # Road conditions
-            "illegal parking",
-            "go against one-way traffic",
-            "Illegal lane change",
-            "run the red light",
-            "vehicle on solid line",
-            # Non-motorized vehicle traffic violations
-            "illegal passenger carrying",
-            "wrong-way driving",
-            "running red light",
-            "improper lane usage",
-            "improper parking",
-            "no safety helmet",
-            # Pedestrian traffic violations
-            "failure to use crosswalks",
-            "walking on non-sidewalks",
-            "run the red light",
-            "other violations",
-            # Vehicle behaviors
-            "lane change",
-            "vehicle  turn",
-            "vehicle U-turn",
-            "overtake",
-            "vehicle queuing",
-            "traffic congestion",
-            "too close to another car",
-            # Non-motorized vehicle behaviors
-            "waiting at traffic light",
-            "normal driving in non-motor lane",
-            # Pedestrian behaviors
-            "wait for a traffic light",
-            "walk on the crosswalk",
-            "walk on the sidewalk",
-            # Abnormal traffic situations
-            "traffic accident",
-            "traffic jam",
-            # Traffic participant interaction behaviors
-            "vehicle yielding to pedestrian",
-            "vehicle waiting for boarding",
-            "vehicle waiting for alighting",
-            "bus temporary stop",
-            "vehicle entering parking lot",
-            "vehicle exiting parking lot"
-        ]
-        self.TR2ObjList = {
-            "road type": [
-                "Object",
-                "main city road",
-                "street",
-                "quick road",
-                "residential street",
-                "alley",
-                "intersection",
-                "lane merge",
-                "pedestrian crossing",
-                "bridge",
-                "non-motorized road",
-                "unpaved road",
-                "bus lane",
-                "gridline",
-                "overhead walkway",
-                "other paved road",
-            ],
-            "vehical": [
-                "Object",
-                "car",
-                "large vehicle",
-                "other vehicle",
-            ],
+        self.TR2ObjList = { # Traffic to Object List
+            "road type": ["Object", "main city road", "street", "quick road", "residential street", "alley", "intersection", "lane merge", "pedestrian crossing", "bridge", "non-motorized road", "unpaved road", "bus lane", "gridline", "overhead walkway", "other paved road"],
+            "vehical": ["Object", "car", "large vehicle", "other vehicle"],
             "pedestrian": ["Object", "single pedestrian", "pedestrian group"],
-            "road facility": [
-                "Object",
-                "motor vehicle parking spot",
-                "non-motorised parking spot",
-                "lane marking",
-                "road divider",
-            ],
-            "road condition": [
-                "Object",
-                "normal pavement",
-                "damaged pavement",
-                "road construction",
-            ],
-            "vehicle traffic violation": [
-                "Object",
-                "illegal parking",
-                "go against one-way traffic",
-                "Illegal lane change",
-                "run the red light",
-                "vehicle on solid line",
-            ],
-            "non-motor vehicle violation": [
-                "Object",
-                "illegal passenger carrying",
-                "driving in the wrong direction",
-                "run the red light",
-                "improper lane usage",
-                "improper parking",
-                "no safety helmet"
-            ],
-            "pedestrian traffic violation": [
-                "Object",
-                "failure to use crosswalks",
-                "walking on non-sidewalks",
-                "run the red light",
-                "other violations",
-            ],
-            "vehicle behavior": [
-                "Object",
-                "lane change",
-                "vehicle  turn",
-                "vehicle U-turn",
-                "overtake",
-                "vehicle queuing",
-                "traffic congestion",
-                "too close to another car",
-            ],
-            "non-motor vehicle behavior": [
-                "Object",
-                "wait for a traffic light",
-                "driving in non-motor lane"
-            ],
-            "pedestrian behavior": [
-                "Object",
-                "wait for a traffic light",
-                "walk on the crosswalk",
-                "walk on the sidewalk",
-            ],
-            "abnormal traffic situation": [
-                "Object",
-                "traffic accident",
-                "traffic jam",
-            ],
-            "traffic participant interaction": [
-                "Object",
-                "vehicle yielding to pedestrians",
-                "vehicle waiting for passengers to board",
-                "vehicle waiting for passengers to alight",
-                "bus temporary stop",
-                "vehicle entering the parking lot",
-                "vehicle exiting the parking lot"
-            ],
-            "LandCover Class": ["Object Class"],
+            "road facility": ["Object", "motor vehicle parking spot", "non-motorised parking spot", "lane marking", "road divider"],
+            "road condition": ["Object", "normal pavement", "damaged pavement", "road construction"],
+            "vehicle traffic violation": ["Object", "illegal parking", "go against one-way traffic", "Illegal lane change", "run the red light", "vehicle on solid line"],
+            "non-motor vehicle violation": ["Object", "illegal passenger carrying", "wrong-way driving", "running red light", "improper lane usage", "improper parking", "no safety helmet"],
+            "pedestrian traffic violation": ["Object", "failure to use crosswalks", "walking on non-sidewalks", "run the red light", "other violations"],
+            "vehicle behavior": ["Object", "lane change", "vehicle turn", "vehicle U-turn", "overtake", "vehicle queuing", "traffic congestion", "too close to another car"],
+            "non-motor vehicle behavior": ["Object", "waiting at traffic light", "normal driving in non-motor lane"],
+            "pedestrian behavior": ["Object", "wait for a traffic light", "walk on the crosswalk", "walk on the sidewalk"],
+            "abnormal traffic situation": ["Object", "traffic accident", "traffic jam"],
+            "traffic participant interaction": ["Object", "vehicle yielding to pedestrian", "vehicle waiting for boarding", "vehicle waiting for alighting", "bus temporary stop", "vehicle entering parking lot", "vehicle exiting parking lot"],
+            "LandCover Class": ["Object Class"], # Default/placeholder
         }
-
-        # self.TR2ObjList = {
-        #     "road type": ["main city road","quick road","residential street","alley","intersection","lane merge","pedestrian crossing","bridge","non-motorized road","unpaved road","bus lane","gridline","overhead walkway","street","other paved road"],
-        #     "vehical": ["car","large vehicle","other vehicle",],
-        #     "pedestrian": [ "single pedestrian", "pedestrian group"],
-        #     "road facility": ["motor vehicle parking spot","non-motorised parking spot","lane marking","road divider"],
-        #     "road condition": ["normal pavement","damaged pavement","road construction"],
-        #     "vehicle traffic violation": ["illegal parking","go against one-way traffic","Illegal lane change","run the red light","vehicle on solid line"],
-        #     "pedestrian traffic violation": ["failure to use crosswalks","walking on non-sidewalks","run the red light","other violations",],
-        #     "vehicle behavior": ["lane change","vehicle  turn","vehicle U-turn","overtake","vehicle queuing","traffic congestion","too close to another car",],
-        #     "pedestrian behavior": ["wait for a traffic light","walk on the crosswalk","walk on the sidewalk"]}
-
-        # Contain/presence problem answers
-        self.contain_ans_landcover = QtWidgets.QComboBox(self)
-        self.contain_ans_subset = QtWidgets.QComboBox(self)
-        self.contain_ans_number = QtWidgets.QComboBox(self)
-        self.contain_ans_location = QtWidgets.QComboBox(self)
-        self.contain_ans_shape = QtWidgets.QComboBox(self)
-        self.contain_ans_Area = QtWidgets.QComboBox(self)
-        self.contain_ans_length = QtWidgets.QComboBox(self)
-        self.contain_ans_distribution = QtWidgets.QComboBox(self)
-        self.contain_ans_better = QtWidgets.QComboBox(self)
-        self.submit_contain = QtWidgets.QPushButton("Confirm", self)
-
-        self.contain_list = [
-            self.contain_ans_landcover,
-            self.contain_ans_subset,
-            self.contain_ans_number,
-            self.contain_ans_location,
-            self.contain_ans_shape,
-            self.contain_ans_Area,
-            self.contain_ans_length,
-            self.contain_ans_distribution,
-            self.contain_ans_better,
-        ]
-        self.landcover_list = [
-            "agricultural area",
-            "airport",
-            "apron",
-            "building",
-            "beach",
-            "pier",
-            "intersection",
-            "park",
-            "parking area",
-            "sports field",
-            "road",
-            "concrete floor",
-            "vegetation area",
-            "wasteland",
-            "water area",
-        ]  # Store all landcover types, including some unseen categories to balance Yes-type questions in presence
-
-        self.subset_list = [
-            "woodland",
-            "grassland",
-            "other vegetation area",
-            "pond",
-            "river",
-            "ditch",
-            "sea",
-            "lake",
-            "other water area",
-            "wide road",
-            "narrow road",
-            "low-rise residential building",
-            "high-rise residential building",
-            "low-rise non-residential building",
-            "high-rise non-residential building",
-            "agricultural area",
-            "wasteland",  # barren land
-            "intersection",
-            "parking area",
-            "park",
-            "concrete floor",  # concrete floor
-            # Sports field 
-            "basketball court",
-            "football field",
-            "baseball field",
-            "athletic track",
-            "tennis courts",
-            "pier",  # pier 
-            "beach",
-            "airport",
-            "apron",
-        ]  # Store all subset types, including some unseen categories to balance Yes-type questions in presence
-
-        # self.subset_list=sorted(sub_list,key=lambda word:word[:2]) # Sort by first two letters
-
-        self.LC2SubList = {
-            "building": [
-                "Subset",
-                "low-rise residential building",
-                "high-rise residential building",
-                "low-rise non-residential building",
-                "high-rise non-residential building",
-            ],
-            "vegetation area": [
-                "Subset",
-                "woodland",
-                "grassland",
-                "other vegetation area",
-            ],
-            "water area": [
-                "Subset",
-                "ditch",
-                "pond",
-                "river",
-                "sea",
-                "lake",
-                "other water area",
-            ],
+        self.LC2SubList = { # LandCover to Subset List (for PresContain)
+            "building": ["Subset", "low-rise residential building", "high-rise residential building", "low-rise non-residential building", "high-rise non-residential building"],
+            "vegetation area": ["Subset", "woodland", "grassland", "other vegetation area"],
+            "water area": ["Subset", "ditch", "pond", "river", "sea", "lake", "other water area"],
             "road": ["Subset", "wide road", "narrow road"],
             "agricultural area": ["Subset", "agricultural area"],
             "wasteland": ["Subset", "wasteland"],
@@ -588,3454 +239,1438 @@ class Annotation_window(QWidget):
             "parking area": ["Subset", "parking area"],
             "park": ["Subset", "park"],
             "concrete floor": ["Subset", "concrete floor"],
-            "sports field": [
-                "Subset",
-                "basketball court",
-                "baseball field",
-                "football field",
-                "tennis courts",
-                "athletic track",
-            ],
+            "sports field": ["Subset", "basketball court", "baseball field", "football field", "tennis courts", "athletic track"],
             "pier": ["Subset", "pier"],
             "beach": ["Subset", "beach"],
-            "airport": ["Subset", "airport"],
+            "airport": ["Subset", "airport"], # Although 'airport' is a LandCover, it can also be a subset if a larger area is 'airport'
             "apron": ["Subset", "apron"],
-            "LandCover Class": ["Subset Class"],
+            "LandCover Class": ["Subset Class"], # Default/placeholder
         }
 
-        # self.LC2SubList = {
-        #     "building": ["low-rise residential building","high-rise residential building","low-rise non-residential building","high-rise non-residential building",],
-        #     "vegetation area": ["woodland","grassland","other vegetation area",],
-        #     "water area": ["ditch","pond","river","sea","lake","other water area",],
-        #     "road": [ "wide road", "narrow road"],
-        #     "agricultural area": [ "agricultural area"],
-        #     "wasteland": [ "wasteland"],
-        #     "intersection": [ "intersection"],
-        #     "parking area": [ "parking area"],
-        #     "park": [ "park"],
-        #     "concrete floor": [ "concrete floor"],
-        #     "sports field": ["basketball court","baseball field","football field","tennis courts","athletic track",],
-        #     "pier": [ "pier"],
-        #     "beach": [ "beach"],
-        #     "airport": [ "airport"],
-        #     "apron": [ "apron"]}
-        #  , 'water area'
-        # Store distance and location information for different objects {(A,B):[dis_index,location,distance]}
-        self.dis_loc_dict = {}
-        # Store contain/presence collected information {landcover1:[[index,subset],[index,number],...],landcover2:[[index,subset],[index,number],...],...}
-        self.contain_dict = {}
-        self.traffic_dict = {}
-        self.residential_dict = {}
+        # --- Temporary Storage for Complex Annotations (per image) ---
+        self.dis_loc_details = {}  # Stores distance/location pairs: {(A,B): [distance_index, location_text, distance_text]}
+        self.contain_details = {}  # Stores PresContain details: {landcover_class: [[subset_idx, subset_text], [attr1_idx, attr1_text], ...]}
+        self.traffic_details = {}  # Stores Traffic details: {landcover_class: [[object_idx, object_text], [attr1_idx, attr1_text], ...]}
+        self.residential_details = {} # Stores Residential details: {landcover_class: [[object_idx, object_text], [attr1_idx, attr1_text], ...]}
 
-        self.location = [
-            "above",
-            "below",
-            "left",
-            "right",
-            "upper left",
-            "upper right",
-            "bottom left",
-            "bottom right",
-        ]
-        self.ablocation = {
-            "above": "below",
-            "below": "above",
-            "left": "right",
-            "right": "left",
-            "upper left": "bottom right",
-            "upper right": "bottom left",
-            "bottom left": "upper right",
-            "bottom right": "upper left",
-        }
-        # Define QLabel
-        # Set titles
-        self.headline_folder_rgb = QLabel("1.select OPT image folder:", self)
-        self.headline_folder_tir = QLabel("2.select TIR image folder: ", self)
-        self.headline_folder_save = QLabel("3.select save folder: ", self)
+        # --- Common Lists for Dropdowns ---
+        self.location_options = ["above", "below", "left", "right", "upper left", "upper right", "bottom left", "bottom right"]
+        # self.object_dict=['dog','cat','plane','house','twon'] # REMOVED: Example, not used directly if dynamic
 
-        # Display output paths
-        self.selected_folder_label_rgb = QLabel(self)
-        self.selected_folder_label_tir = QLabel(self)
-        self.selected_folder_label_save = QLabel(self)
-
-        # Define browse buttons
+        # --- UI Element Definitions ---
+        # Folder Selection UI
+        self.headline_folder_rgb = QLabel("1. Select OPT (Optical) Image Folder:", self)
+        self.headline_folder_tir = QLabel("2. Select THE (Thermal) Image Folder:", self)
+        self.headline_folder_save = QLabel("3. Select Annotation Save Folder:", self)
+        self.selected_folder_label_rgb = QLabel(self) # Displays selected RGB folder path
+        self.selected_folder_label_tir = QLabel(self) # Displays selected TIR folder path
+        self.selected_folder_label_save = QLabel(self) # Displays selected save folder path
         self.browse_button_rgb = QtWidgets.QPushButton("Browse OPT", self)
-        self.browse_button_tir = QtWidgets.QPushButton("Browse TIR", self)
+        self.browse_button_tir = QtWidgets.QPushButton("Browse THE", self)
         self.browse_button_save = QtWidgets.QPushButton("Browse SAVE", self)
 
-        # Display annotated information
-        self.display_anno = QTextEdit(self)
+        # Image Display UI
+        self.image_box_rgb = QLabel(self) # Displays RGB image
+        self.image_box_tir = QLabel(self) # Displays TIR image
+        self.rgb_name_label = QLabel(self)  # Displays current RGB image name
+        self.progress_bar_rgb = QLabel(self) # Displays RGB image progress (e.g., "1 of 100")
+        self.tir_name_label = QLabel(self) # Displays current TIR image name
+        self.progress_bar_tir = QLabel(self) # Displays TIR image progress
 
-        # Image display area
-        self.image_box_rgb = QLabel(self)  # Display RGB image
-        self.image_box_tir = QLabel(self)  # Display SAR image
+        # Annotation Log/Display UI
+        self.display_anno_log = QTextEdit(self) # Displays a log of confirmed annotations for the current image
+        self.display_anno_log.setReadOnly(True)
 
-        # Display image information
-        self.rgb_name_label = QLabel(self)  # Image name
-        self.progress_bar_rgb = QLabel(self)  # Display progress
-        self.tir_name_label = QLabel(self)  # Image name
-        self.progress_bar_tir = QLabel(self)  # Display progress
+        # --- Annotation Categories (Checkboxes) ---
+        self.question_headline = QLabel("Select annotation categories and provide details:", self)
+        self.chk_match = QCheckBox("Match & Weather", self)
+        self.chk_theme = QCheckBox("Scene Theme", self)
+        self.chk_dis_loc = QCheckBox("Distance/Location", self)
+        self.chk_contain = QCheckBox("Contain/Presence", self)
+        self.chk_deduce = QCheckBox("Deduce (Custom Q&A)", self) # Retained this for flexibility if needed later for non-VQA attributes
+        self.chk_traffic = QCheckBox("Traffic Elements", self)
+        self.chk_residential = QCheckBox("Residential Elements", self)
+        self.chk_agricultural = QCheckBox("Agricultural Features", self)
+        self.chk_industrial = QCheckBox("Industrial Features", self)
+        self.chk_uav = QCheckBox("UAV Parameters", self)
 
-        # Annotation information title
-        # Question title
-        self.question_headline = QLabel(
-            "select the questions you want to answer and provide answers", self
-        )
+        # --- Annotation Detail Widgets (ComboBoxes, LineEdits, Buttons per category) ---
+        # These will be initialized in self.init_ui() and added to a scrollable layout.
 
-        # Question types, checkboxes
-        self.question_Match = QCheckBox("Match", self)
-        self.question_theme = QCheckBox("Theme", self)
-        self.question_dis_loc = QCheckBox("Distance/Location", self)
-        self.question_contain = QCheckBox("Contain/Presence", self)
-        self.question_deduce = QCheckBox("Deduce", self)
-        self.question_traffic = QCheckBox("Traffic", self)
-        self.question_residential = QCheckBox("Residential", self)
-        self.question_agricultural = QCheckBox("Agricultural", self)
-        self.question_industrial = QCheckBox("Industrial", self)
-        self.question_uav = QCheckBox("UAV", self)
+        # Match & Weather
+        self.match_options_box = QComboBox(self)
+        self.mist_options_box = QComboBox(self)
+        self.night_options_box = QComboBox(self)
 
-        # Custom question input boxes
-        self.Deduce_Qst_one = QLineEdit("Enter your question 1 (one-word answer)",self)
-        self.Deduce_Ans_one = QLineEdit("Enter answer",self)
-        self.Deduce_Qst_two = QLineEdit("Enter your question 2 (one-word answer)",self)
-        self.Deduce_Ans_two = QLineEdit("Enter answer",self)
+        # Theme
+        self.theme_residential_box = QComboBox(self)
+        self.theme_urban_rural_box = QComboBox(self)
 
-        # Various answer checkboxes
-        # Match answer
-        self.Match_pick_box = QComboBox(self)
-        # Whether there is fog
-        self.Mist_pick_box = QComboBox(self)
-        # Whether it's night
-        self.night_pick_box = QComboBox(self)
-        # Theme answers
-        self.theme_ans_r = QComboBox(self)
-        self.theme_ans_ur = QComboBox(self)
-        # Distance and location answers
-        self.dis_loc_ans_loc_a = QComboBox(self)
-        self.dis_loc_ans_object_a = QComboBox(self)
-        self.dis_loc_is_cluster_a = QComboBox(self)
-        self.dis_loc_is_cluster_b = QComboBox(self)
-        self.dis_loc_ans_loc_b = QComboBox(self)
-        self.dis_loc_ans_object_b = QComboBox(self)
-        self.dis_loc_ans_distance = QComboBox(self)
-        self.dis_loc_ans_location = QComboBox(self)
+        # Distance/Location
+        self.disloc_pos_a_box = QComboBox(self)
+        self.disloc_obj_a_box = QComboBox(self)
+        self.disloc_cluster_a_box = QComboBox(self)
+        self.disloc_pos_b_box = QComboBox(self)
+        self.disloc_obj_b_box = QComboBox(self)
+        self.disloc_cluster_b_box = QComboBox(self)
+        self.disloc_distance_box = QComboBox(self)
+        self.disloc_relation_box = QComboBox(self)
+        self.btn_submit_disloc = QtWidgets.QPushButton("Confirm D/L Pair", self)
+        self.btn_measure_distance = QtWidgets.QPushButton("Measure Distance", self)
+        self.btn_finish_disloc = QtWidgets.QPushButton("Finalize D/L", self)
 
-        # UAV answers
-        self.uav_ans_height = QComboBox(self)
-        self.uav_ans_angle = QComboBox(self)
-        # Agricultural area answers
-        self.agricultural_ans_road = QComboBox(self)
-        self.agricultural_ans_water = QComboBox(self)
-        # Industrial area answers
-        self.industrial_ans_facility = QComboBox(self)
-        self.industrial_ans_scale = QComboBox(self)
-        self.industrial_ans_location = QComboBox(self)
+        # Contain/Presence
+        self.contain_landcover_box = QComboBox(self)
+        self.contain_subset_box = QComboBox(self)
+        self.contain_number_box = QComboBox(self)
+        self.contain_location_box = QComboBox(self)
+        self.contain_shape_box = QComboBox(self)
+        self.contain_area_box = QComboBox(self)
+        self.contain_length_box = QComboBox(self)
+        self.contain_distribution_box = QComboBox(self)
+        self.contain_quality_box = QComboBox(self) # "Better" renamed to "Quality"
+        self.btn_submit_contain = QtWidgets.QPushButton("Confirm C/P Item", self)
+        self.btn_measure_area = QtWidgets.QPushButton("Measure Area", self)
+        self.btn_finish_contain = QtWidgets.QPushButton("Finalize C/P", self)
+        self.btn_delete_contain_landcover = QtWidgets.QPushButton("Delete Current C/P LandCover", self)
 
-        # Define various button controls
-        self.Pre_btn = QtWidgets.QPushButton("Pre", self)
-        self.Next_btn = QtWidgets.QPushButton("Next", self)
-        self.Sub_btn = QtWidgets.QPushButton("Submit", self)
-        self.Gen_btn = QtWidgets.QPushButton("Generate", self)
+        # Deduce (Retained for attribute input, not VQA pair generation)
+        self.deduce_q1_input = QLineEdit("Enter custom attribute 1 key", self) # Changed placeholder
+        self.deduce_a1_input = QLineEdit("Enter attribute 1 value", self)      # Changed placeholder
+        self.deduce_q2_input = QLineEdit("Enter custom attribute 2 key", self) # Changed placeholder
+        self.deduce_a2_input = QLineEdit("Enter attribute 2 value", self)      # Changed placeholder
+        self.btn_submit_deduce1 = QtWidgets.QPushButton("Submit Attr 1", self)
+        self.btn_submit_deduce2 = QtWidgets.QPushButton("Submit Attr 2", self)
 
-        # Define answer and question library lists
-        self.ans_list = [
-            self.Match_pick_box,
-            self.Mist_pick_box,
-            self.night_pick_box,
-            self.theme_ans_r,
-            self.theme_ans_ur,
-            self.dis_loc_ans_loc_a,
-            self.dis_loc_is_cluster_a,
-            self.dis_loc_ans_object_a,
-            self.dis_loc_ans_loc_b,
-            self.dis_loc_is_cluster_b,
-            self.dis_loc_ans_object_b,
-            self.dis_loc_ans_distance,
-            self.dis_loc_ans_location,
-            self.contain_ans_landcover,
-            self.contain_ans_subset,
-            self.contain_ans_number,
-            self.contain_ans_location,
-            self.contain_ans_shape,
-            self.contain_ans_Area,
-            self.contain_ans_length,
-            self.contain_ans_distribution,
-            self.contain_ans_better,
-            self.Deduce_Qst_one,
-            self.Deduce_Ans_one,
-            self.Deduce_Qst_two,
-            self.Deduce_Ans_two,
-            self.traffic_ans_landcover,
-            self.traffic_ans_object,
-            self.traffic_ans_number,
-            self.traffic_ans_location,
-            self.traffic_ans_better,
-            self.residential_ans_landcover,
-            self.residential_ans_object,
-            self.residential_ans_number,
-            self.residential_ans_location,
-            self.residential_ans_better,
-            self.agricultural_ans_road,
-            self.agricultural_ans_water,
-            self.industrial_ans_facility,
-            self.industrial_ans_scale,
-            self.industrial_ans_location,
-            self.uav_ans_height,
-            self.uav_ans_angle,
+        # Traffic
+        self.traffic_landcover_box = QComboBox(self)
+        self.traffic_object_box = QComboBox(self)
+        self.traffic_number_box = QComboBox(self)
+        self.traffic_location_box = QComboBox(self)
+        self.traffic_quality_box = QComboBox(self)
+        self.btn_submit_traffic = QtWidgets.QPushButton("Confirm Traffic Item", self)
+        self.btn_finish_traffic = QtWidgets.QPushButton("Finalize Traffic", self)
+        self.btn_delete_traffic_landcover = QtWidgets.QPushButton("Delete Current Traffic LandCover", self)
+
+        # Residential
+        self.residential_landcover_box = QComboBox(self)
+        self.residential_object_box = QComboBox(self)
+        self.residential_number_box = QComboBox(self)
+        self.residential_location_box = QComboBox(self)
+        self.residential_quality_box = QComboBox(self)
+        self.btn_submit_residential = QtWidgets.QPushButton("Confirm Residential Item", self)
+        self.btn_finish_residential = QtWidgets.QPushButton("Finalize Residential", self)
+        self.btn_delete_residential_landcover = QtWidgets.QPushButton("Delete Current Residential LandCover", self)
+
+        # Agricultural
+        self.agri_road_box = QComboBox(self)
+        self.agri_water_box = QComboBox(self)
+
+        # Industrial
+        self.ind_facility_box = QComboBox(self)
+        self.ind_scale_box = QComboBox(self)
+        self.ind_location_box = QComboBox(self)
+
+        # UAV
+        self.uav_height_box = QComboBox(self)
+        self.uav_angle_box = QComboBox(self)
+
+        # --- Navigation and Control Buttons ---
+        self.btn_previous_image = QtWidgets.QPushButton("Previous", self)
+        self.btn_next_image = QtWidgets.QPushButton("Next", self)
+        self.btn_submit_all_current = QtWidgets.QPushButton("Save Current Image Attrs", self) # Renamed for clarity
+        self.btn_generate_file = QtWidgets.QPushButton("Save All to File", self) # Renamed for clarity
+
+        # --- Lists for easier management of UI elements (used in init_pannel) ---
+        self.all_checkboxes = [
+            self.chk_match, self.chk_theme, self.chk_dis_loc, self.chk_contain,
+            self.chk_deduce, self.chk_traffic, self.chk_residential,
+            self.chk_agricultural, self.chk_industrial, self.chk_uav
         ]
-        self.question_list = [
-            self.question_Match,
-            self.question_theme,
-            self.question_dis_loc,
-            self.question_contain,
-            self.question_deduce,
-            self.question_traffic,
-            self.question_residential,
-            self.question_agricultural,
-            self.question_industrial,
-            self.question_uav,
+        self.all_comboboxes_and_lineedits = [ # For resetting them
+            self.match_options_box, self.mist_options_box, self.night_options_box,
+            self.theme_residential_box, self.theme_urban_rural_box,
+            self.disloc_pos_a_box, self.disloc_obj_a_box, self.disloc_cluster_a_box,
+            self.disloc_pos_b_box, self.disloc_obj_b_box, self.disloc_cluster_b_box,
+            self.disloc_distance_box, self.disloc_relation_box,
+            self.contain_landcover_box, self.contain_subset_box, self.contain_number_box,
+            self.contain_location_box, self.contain_shape_box, self.contain_area_box,
+            self.contain_length_box, self.contain_distribution_box, self.contain_quality_box,
+            self.deduce_q1_input, self.deduce_a1_input, self.deduce_q2_input, self.deduce_a2_input,
+            self.traffic_landcover_box, self.traffic_object_box, self.traffic_number_box,
+            self.traffic_location_box, self.traffic_quality_box,
+            self.residential_landcover_box, self.residential_object_box, self.residential_number_box,
+            self.residential_location_box, self.residential_quality_box,
+            self.agri_road_box, self.agri_water_box,
+            self.ind_facility_box, self.ind_scale_box, self.ind_location_box,
+            self.uav_height_box, self.uav_angle_box
+        ]
+        # Lists of QComboBoxes for specific categories (used for populating from stored attributes)
+        self.contain_attribute_widgets = [ # Order matters: subset, number, location, shape, area, length, distribution, quality
+            self.contain_subset_box, self.contain_number_box, self.contain_location_box,
+            self.contain_shape_box, self.contain_area_box, self.contain_length_box,
+            self.contain_distribution_box, self.contain_quality_box
+        ]
+        self.traffic_attribute_widgets = [ # Order: object, number, location, quality
+            self.traffic_object_box, self.traffic_number_box, self.traffic_location_box, self.traffic_quality_box
+        ]
+        self.residential_attribute_widgets = [ # Order: object, number, location, quality
+            self.residential_object_box, self.residential_number_box, self.residential_location_box, self.residential_quality_box
         ]
 
-        self.init_ui()  # Set specific window details in init_ui()
 
-    def init_ui(self):
-        # Annotation window title and minimum size
-        self.setObjectName("mainwindow")
-        self.setWindowTitle(self.title)
-        self.setMinimumSize(self.width, self.height)
+        self._init_ui_layout()  # Setup the layout and specific widget properties
 
-        # File selection box position and format
-        # RGB part control settings
-        # Folder selection prompt
+    def _init_ui_layout(self):
+        """Initializes the UI layout, widget positions, styles, and connections."""
+        self.setObjectName("mainwindow") # For styling
+
+        # --- Folder Selection Area ---
         self.headline_folder_rgb.setGeometry(20, 20, 250, 20)
-        # self.headline_folder_rgb.setStyleSheet('font-size:18px,font-weight:bold')
-        self.headline_folder_rgb.setObjectName("headline")
-        # Display folder
         self.selected_folder_label_rgb.setGeometry(280, 20, 500, 23)
-        self.selected_folder_label_rgb.setObjectName("selectedFolderLabel")
-        # Browse button control position and format
-        self.browse_button_rgb.setGeometry(790, 20, 85, 23)
-        self.browse_button_rgb.setStyleSheet("font-size:14px")
-        self.browse_button_rgb.clicked.connect(self.pick_new_rgb)
+        self.browse_button_rgb.setGeometry(790, 20, 100, 23) # Increased width
+        self.browse_button_rgb.clicked.connect(self.select_rgb_folder)
 
-        # RGB part control settings
-        # Folder selection prompt
         self.headline_folder_tir.setGeometry(20, 50, 250, 20)
-        self.headline_folder_tir.setObjectName("headline")
-        # Display file folder path
         self.selected_folder_label_tir.setGeometry(280, 50, 500, 23)
-        self.selected_folder_label_tir.setObjectName("selectedFolderLabel")
-        # Browse rgb button
-        self.browse_button_tir.setGeometry(790, 50, 85, 23)
-        self.browse_button_tir.setStyleSheet("font-size:14px")
-        self.browse_button_tir.clicked.connect(self.pick_new_tir)
+        self.browse_button_tir.setGeometry(790, 50, 100, 23) # Increased width
+        self.browse_button_tir.clicked.connect(self.select_tir_folder)
 
-        # Save annotated file folder settings
-        # Select file prompt title
         self.headline_folder_save.setGeometry(20, 80, 250, 20)
-        self.headline_folder_save.setObjectName("headline")
-        # Display stored file path
         self.selected_folder_label_save.setGeometry(280, 80, 500, 23)
-        self.selected_folder_label_save.setObjectName("selectedFolderLabel")
-        # Set browse save button
-        self.browse_button_save.setGeometry(790, 80, 85, 23)
-        self.browse_button_save.setStyleSheet("font-size:14px")
-        self.browse_button_save.clicked.connect(self.pick_save)
-        # Image display in display function
+        self.browse_button_save.setGeometry(790, 80, 100, 23) # Increased width
+        self.browse_button_save.clicked.connect(self.select_save_folder)
 
-        # Display annotated question generation status
-        self.display_anno.setGeometry(20, 590, 885, 160)
+        # --- Image Display Area ---
+        self.image_box_rgb.setGeometry(20, 145, self.img_panel_width, self.img_panel_height)
+        self.image_box_rgb.setAlignment(Qt.AlignCenter) # Center image
+        self.image_box_rgb.setStyleSheet("border: 1px solid #ccc;")
+        self.rgb_name_label.setGeometry(20, 120, 300, 20)
+        self.progress_bar_rgb.setGeometry(330, 120, 120, 20) # Adjusted position
 
-            # Question design part
-        X_base = self.img_panel_width * 2 + 15  # Start x coordinate of question part
+        self.image_box_tir.setGeometry(20 + self.img_panel_width + 10, 145, self.img_panel_width, self.img_panel_height)
+        self.image_box_tir.setAlignment(Qt.AlignCenter)
+        self.image_box_tir.setStyleSheet("border: 1px solid #ccc;")
+        self.tir_name_label.setGeometry(20 + self.img_panel_width + 10, 120, 300, 20)
+        self.progress_bar_tir.setGeometry(330 + self.img_panel_width + 10, 120, 120, 20)
 
-        # Add a scroll bar
-        self.scroll_area = QtWidgets.QScrollArea(self)
-        self.scroll_area.setGeometry(X_base, 20, 600, 700)
+        # --- Annotation Log ---
+        self.display_anno_log.setGeometry(20, 590, self.img_panel_width * 2 + 10, 160) # Spans under both images
+
+        # --- Annotation Panel (Scrollable) ---
+        X_base_annotation_panel = self.img_panel_width * 2 + 30 # Start x-coordinate for the annotation panel
+        annotation_panel_width = 600 # Fixed width for now, adjust as needed
+        annotation_panel_height = 700 # Fixed height for now
+
+        self.scroll_area = QScrollArea(self)
+        self.scroll_area.setGeometry(X_base_annotation_panel, 20, annotation_panel_width, annotation_panel_height)
         self.scroll_area.setWidgetResizable(True)
-
-        self.scroll_content = QtWidgets.QWidget()
-        self.scroll_area.setWidget(self.scroll_content)
-
-        self.scroll_layout = QtWidgets.QVBoxLayout(self.scroll_content)
-
-        # Set question title
-        self.question_headline.setGeometry(X_base + 10, 20, 500, 20)
-        self.question_headline.setObjectName("headline")
-
-        # Set question checkboxes and get answers
-        # match question
-        self.question_Match.setChecked(False)
-        self.question_Match.setGeometry(X_base + 37, 60, 260, 20)
-        self.question_Match.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_Match.stateChanged.connect(self.ans_match)
-
-        # theme question
-        self.question_theme.setChecked(False)
-        self.question_theme.setGeometry(X_base + 37, 100, 260, 20)
-        self.question_theme.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_theme.stateChanged.connect(self.ans_theme)
-        # distance/location question
-        self.question_dis_loc.setChecked(False)
-        self.question_dis_loc.setGeometry(X_base + 37, 140, 260, 20)
-        self.question_dis_loc.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_dis_loc.stateChanged.connect(self.del_dis_loc)
-
-        # self.question_dis_loc.stateChanged.connect(self.get_object_one)
-        # self.question_dis_loc.stateChanged.connect(self.a)
-        # contain/presence question
-        self.question_contain.setChecked(False)
-        self.question_contain.setGeometry(X_base + 37, 300, 260, 20)
-        self.question_contain.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_contain.stateChanged.connect(self.del_contain)
-        # Updated on February 19, 2024, for prescontain, only one landcover will be deleted each time instead of all
-        # self.question_contain.stateChanged.connect(self.del_pres_contain_attribution)
-
-        # Deduce question
-        self.question_deduce.setChecked(False)
-        self.question_deduce.setGeometry(X_base + 37, 470, 350, 20)
-        self.question_deduce.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_deduce.stateChanged.connect(self.ans_deduce_one)
-        self.question_deduce.stateChanged.connect(self.ans_deduce_two)
-        self.question_deduce.stateChanged.connect(self.del_deduce)
-
-        # Traffic question
-        self.question_traffic.setChecked(False)
-        self.question_traffic.setGeometry(X_base + 37, 340, 260, 20)
-        self.question_traffic.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_traffic.stateChanged.connect(self.del_traffic)
-
-        # Residential question
-        self.question_residential.setChecked(False)
-        self.question_residential.setGeometry(X_base + 37, 380, 260, 20)
-        self.question_residential.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_residential.stateChanged.connect(self.del_residential)
-
-        # Agricultural question
-        self.question_agricultural.setChecked(False)
-        self.question_agricultural.setGeometry(X_base + 37, 380, 260, 20)
-        self.question_agricultural.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_agricultural.stateChanged.connect(self.ans_agricultural)
-
-        # Industrial question
-        self.question_industrial.setChecked(False)
-        self.question_industrial.setGeometry(X_base + 37, 420, 260, 20)
-        self.question_industrial.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_industrial.stateChanged.connect(self.ans_industrial)
-
-        # UAV question
-        self.question_uav.setChecked(False)
-        self.question_uav.setGeometry(X_base + 37, 460, 260, 20)
-        self.question_uav.setStyleSheet(
-            "font-size: 17px;font-family:SimHei;font-weight:bold"
-        )
-        self.question_uav.stateChanged.connect(self.ans_uav)
-
-        # Checkbox answer
-        # match question answer
-        # self.Match_pick_box.addItems(['请选择','Yes','No'])
-        self.Match_pick_box.addItems(
-            ["Select", "almost match", "partial match", "not match"]
-        ) 
-        self.Match_pick_box.setGeometry(X_base + 167, 60, 120, 23)
-        self.Match_pick_box.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.Match_pick_box.currentIndexChanged.connect(self.ans_match)
-
-        self.Mist_pick_box.addItems(
-            ["Check for mist", "mist", "not mist", "not sure"]
-        )  
-        self.Mist_pick_box.setGeometry(X_base + 297, 60, 120, 23)
-        self.Mist_pick_box.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.Mist_pick_box.currentIndexChanged.connect(self.ans_mist)
-
-        self.night_pick_box.addItems(
-            ["Check for night", "dark", "not dark", "not sure"]
-        )  
-        self.night_pick_box.setGeometry(X_base + 427, 60, 120, 23)
-        self.night_pick_box.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.night_pick_box.currentIndexChanged.connect(self.ans_night)
-
-        # theme(residential or not)
-        self.theme_ans_r.addItems(["Residential Area", "Residential", "n-Residential"])
-        self.theme_ans_r.setGeometry(X_base + 167, 100, 120, 23)
-        self.theme_ans_r.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.theme_ans_r.currentIndexChanged.connect(self.ans_theme)
-
-        # ubran or rural
-        self.theme_ans_ur.addItems(["Urban/Rural", "Urban", "Rural"])
-        self.theme_ans_ur.setGeometry(X_base + 297, 100, 120, 23)
-        self.theme_ans_ur.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.theme_ans_ur.currentIndexChanged.connect(self.ans_theme)
-
-        # agricultural road question
-        self.agricultural_ans_road.addItems(["Agricultural Road", "Yes", "No"])
-        self.agricultural_ans_road.setGeometry(X_base + 167, 380, 120, 23)
-        self.agricultural_ans_road.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.agricultural_ans_road.currentIndexChanged.connect(self.ans_agricultural)
-
-        # agricultural water question
-        self.agricultural_ans_water.addItems(["Agricultural Water", "Yes", "No"])
-        self.agricultural_ans_water.setGeometry(X_base + 297, 380, 120, 23)
-        self.agricultural_ans_water.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.agricultural_ans_water.currentIndexChanged.connect(self.ans_agricultural)
-
-        # industrial facility question
-        self.industrial_ans_facility.addItems(["Industrial Facility", "Yes", "No"])
-        self.industrial_ans_facility.setGeometry(X_base + 167, 420, 120, 23)
-        self.industrial_ans_facility.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.industrial_ans_facility.currentIndexChanged.connect(self.ans_industrial)
-
-        # industrial scale question
-        self.industrial_ans_scale.addItems(["Industrial Scale", "small", "medium", "large"])
-        self.industrial_ans_scale.setGeometry(X_base + 297, 420, 120, 23)
-        self.industrial_ans_scale.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.industrial_ans_scale.currentIndexChanged.connect(self.ans_industrial)
-
-        # industrial location question
-        self.industrial_ans_location.addItems(
-            [
-                "Industrial Area Location",
-                "top",
-                "bottom",
-                "left",
-                "right",
-                "center",
-                "top left",
-                "top right",
-                "bottom left",
-                "bottom right",
-            ]
-        )
-        self.industrial_ans_location.setGeometry(X_base + 327, 460, 120, 23)
-        self.industrial_ans_location.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.industrial_ans_location.currentIndexChanged.connect(self.ans_industrial)
-
-        # uav height question
-        self.uav_ans_height.addItems(["Height", "150-250", "250-400", "400-550", "none"])
-        self.uav_ans_height.setGeometry(X_base + 167, 460, 120, 23)
-        self.uav_ans_height.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.uav_ans_height.currentIndexChanged.connect(self.ans_uav)
-
-        # uav angle question
-        self.uav_ans_angle.addItems(["Angle", "vertical", "oblique"])
-        self.uav_ans_angle.setGeometry(X_base + 297, 460, 120, 23)
-        self.uav_ans_angle.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.uav_ans_angle.currentIndexChanged.connect(self.ans_uav)
-
-        # distance and location question answer
-        # Title
-        # ['LocationA','top','bottom','left','right','central','upper left','upper right','lower left','lower right']
-        # ['LocationA','above','below','left','right','upper left','upper right','lower left','lower right']
-        # distance/location answer
-        # Select object A: the position in the image, if there is only one object A in the image, the position can be omitted, the position is to distinguish different objects, the position relative to the image
-        self.dis_loc_ans_loc_a.addItems(
-            [
-                "Position A",
-                "none",
-                "top",
-                "bottom",
-                "left",
-                "right",
-                "center",
-                "top left",
-                "top right",
-                "bottom left",
-                "bottom right",
-            ]
-        )
-        self.dis_loc_ans_loc_a.setGeometry(X_base + 37, 180, 120 + 30, 23)
-        self.dis_loc_ans_loc_a.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        self.dis_loc_is_cluster_a.addItems(["Is it a cluster?", "none", "cluster"])
-        self.dis_loc_is_cluster_a.setGeometry(X_base + 162 + 30, 180, 80, 23)
-        self.dis_loc_is_cluster_a.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        # self.dis_loc_ans_loc_a.currentIndexChanged.connect(self.get_object_one)
-
-        self.dis_loc_ans_object_a.addItems(["Object A"] + self.subset_list)
-        self.dis_loc_ans_object_a.setGeometry(X_base + 247 + 30, 180, 150 + 80, 23)
-        self.dis_loc_ans_object_a.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        # self.dis_loc_ans_object_a.currentIndexChanged.connect(self.get_object_one)
-
-        # Select object B: the position in the image
-        self.dis_loc_ans_loc_b.addItems(
-            [
-                "Position B",
-                "none",
-                "top",
-                "bottom",
-                "left",
-                "right",
-                "center",
-                "top left",
-                "top right",
-                "bottom left",
-                "bottom right",
-            ]
-        )
-        self.dis_loc_ans_loc_b.setGeometry(X_base + 37, 213, 120 + 30, 23)
-        self.dis_loc_ans_loc_b.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        # self.dis_loc_ans_loc_b.currentIndexChanged.connect(self.get_object_one)
-        self.dis_loc_is_cluster_b.addItems(["Is it a cluster?", "none", "cluster"])
-        self.dis_loc_is_cluster_b.setGeometry(X_base + 162 + 30, 213, 80, 23)
-        self.dis_loc_is_cluster_b.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        self.dis_loc_ans_object_b.addItems(["Object B"] + self.subset_list)
-        self.dis_loc_ans_object_b.setGeometry(X_base + 247 + 30, 213, 150 + 80, 23)
-        self.dis_loc_ans_object_b.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        # self.dis_loc_ans_object_b.currentIndexChanged.connect(self.get_object_two)
-
-        # The distance between object AB, take the nearest linear distance between the two objects, next to means adjacent  
-        self.dis_loc_ans_distance.addItems(
-            [
-                "A-B Distance",
-                "none",
-                "next to",
-                "0-25",
-                "25-50",
-                "50-75",
-                "75-100",
-                "100-125",
-                "125-150",
-                "150-175",
-                "175-200",
-                "200-225",
-                "225-250",
-                "250-275",
-                "275-300",
-                "300-325",
-                "325-350",
-                "350-375",
-                "375-400",
-            ]
-        )
-        self.dis_loc_ans_distance.setGeometry(X_base + 400 + 110, 180, 100 + 20, 23)
-        self.dis_loc_ans_distance.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        # self.dis_loc_ans_distance.currentIndexChanged.connect(self.get_object_two)
-        # The position of B relative to A
-        self.dis_loc_ans_location.addItems(
-            [
-                "B's position relative to A",
-                "above",
-                "below",
-                "left",
-                "right",
-                "upper left",
-                "upper right",
-                "bottom left",
-                "bottom right",
-            ]
-        )
-        self.dis_loc_ans_location.setGeometry(X_base + 400 + 110, 213, 100 + 20, 23)
-        self.dis_loc_ans_location.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        # self.dis_loc_ans_location.currentIndexChanged.connect(self.get_object_two)
-
-        # Submit position annotation button
-        self.submit_dis_loc = QtWidgets.QPushButton("Confirm", self)
-        self.submit_dis_loc.setGeometry(X_base + 167, 246, 120, 23)
-        self.submit_dis_loc.pressed.connect(self.join_dis_loc_dict)
-        # Distance measurement button
-        self.open_dis_loc = QtWidgets.QPushButton("Length and Distance", self)
-        self.open_dis_loc.setGeometry(X_base + 37, 246, 120, 23)
-        self.open_dis_loc.pressed.connect(self.get_distance)
-        # Generate questions to buffer
-        self.generate_dis_loc_btn = QtWidgets.QPushButton("Finish Input", self)
-        self.generate_dis_loc_btn.setGeometry(X_base + 297, 246, 120, 23)
-        self.generate_dis_loc_btn.pressed.connect(self.generate_dis_loc)
-
-        self.contain_ans_landcover.addItems(["LandCover Class"] + self.landcover_list)
-        self.contain_ans_landcover.setGeometry(X_base + 37, 330, 120 + 80, 23)
-        self.contain_ans_landcover.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.contain_ans_landcover.currentIndexChanged.connect(self.get_subset)
-        self.contain_ans_landcover.currentIndexChanged.connect(
-            self.get_current_landcover
-        )
-
-        self.contain_ans_subset.addItems(["Subset Class"])
-        self.contain_ans_subset.setGeometry(X_base + 167 + 80, 330, 120 + 80, 23)
-        self.contain_ans_subset.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.contain_ans_subset.currentIndexChanged.connect(
-            self.show_pre_contain_attribution
-        )
-
-        # self.contain_ans_number.addItems(['Number','none','1','2','3','4','5','5-10','10-20','20-40','40-100','> 100'])
-        self.contain_ans_number.addItems(
-            [
-                "Number",
-                "none",
-                "1",
-                "2",
-                "3",
-                "4",
-                "5",
-                "6",
-                "6-10",
-                "10-20",
-                "20-40",
-                "40-100",
-                "> 100",
-            ]
-        )  # 2024/1/13
-        self.contain_ans_number.setGeometry(X_base + 297 + 160, 330, 120 + 20, 23)
-        self.contain_ans_number.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # The overall position in the image
-        self.contain_ans_location.addItems(
-            [
-                "Location",
-                "none",
-                "top",
-                "bottom",
-                "left",
-                "right",
-                "central",
-                "upper left",
-                "upper right",
-                "lower left",
-                "lower right",
-                "almost all the picture",
-            ]
-        )
-        self.contain_ans_location.setGeometry(X_base + 37, 363, 120 + 80, 23)
-        self.contain_ans_location.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # The overall shape
-        self.contain_ans_shape.addItems(
-            [
-                "Shape",
-                "none",
-                "Straight",
-                "Curved",
-                "Triangle",
-                "Square",
-                "Rectangle",
-                "other quadrilater",
-                "Rotundity",
-                "other shape",
-            ]
-        )
-        self.contain_ans_shape.setGeometry(X_base + 167 + 80, 363, 120 + 80, 23)
-        self.contain_ans_shape.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        # Area
-        self.contain_ans_Area.addItems(
-            [
-                "Area",
-                "none",
-                "0-100",
-                "100-200",
-                "200-300",
-                "300-400",
-                "400-500",
-                "500-600",
-                "600-700",
-                "700-800",
-                "800-900",
-                "900-1000",
-                "1000-2000",
-                "2000-3000",
-                "3000-4000",
-                "4000-5000",
-                "5000-6000",
-                "6000-7000",
-                "7000-8000",
-                "8000-9000",
-                "9000-10000",
-                "10000-12500",
-                "12500-15000",
-                "15000-17500",
-                "17500-20000",
-                "20000-22500",
-                "22500-25000",
-                "25000-27500",
-                "27500-30000",
-                "30000-32500",
-                "32500-35000",
-                "35000-37500",
-                "37500-40000",
-                "40000-50000",
-                "50000-60000",
-                "more than 60000",
-            ]
-        )
-        self.contain_ans_Area.setGeometry(X_base + 297 + 160, 363, 120 + 20, 23)
-        self.contain_ans_Area.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Length
-        self.contain_ans_length.addItems(
-            [
-                "Length",
-                "none",
-                "0-25",
-                "25-50",
-                "50-75",
-                "75-100",
-                "100-125",
-                "125-150",
-                "150-175",
-                "175-200",
-                "200-225",
-                "225-250",
-                "250-275",
-                "275-300",
-                "300-325",
-                "325-350",
-                "350-375",
-                "375-400",
-            ]
-        )
-        self.contain_ans_length.setGeometry(X_base + 37, 396, 120 + 80, 23)
-        self.contain_ans_length.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Distribution, aggregation or dispersion
-        self.contain_ans_distribution.addItems(
-            [
-                "Distribution",
-                "none",
-                "Clustered Distribution",
-                "Isolated Distribution",
-                "Dense Distribution",
-                "Random distribution",
-                "Uniform distribution",
-            ]
-        )
-        self.contain_ans_distribution.setGeometry(X_base + 167 + 80, 396, 120 + 80, 23)
-        self.contain_ans_distribution.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Modal better
-        self.contain_ans_better.addItems(
-            ["Better", "optical", "thermal", "almost same"]
-        )
-        self.contain_ans_better.setGeometry(X_base + 297 + 160, 396, 120 + 20, 23)
-        self.contain_ans_better.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Confirm, calculate area, generate questions
-        self.submit_contain.setGeometry(X_base + 167, 429, 120, 23)
-        self.submit_contain.pressed.connect(self.join_contain)
-
-        self.open_contain = QtWidgets.QPushButton("Calculate Area", self)
-        self.open_contain.setGeometry(X_base + 37, 429, 120, 23)
-        self.open_contain.pressed.connect(self.get_area)
-
-        self.generate_contain_btn = QtWidgets.QPushButton("Finish Input", self)
-        self.generate_contain_btn.setGeometry(X_base + 297, 429, 120, 23)
-        self.generate_contain_btn.pressed.connect(self.generate_contain)
-        # Delete current landcover
-        self.del_contain_btn = QtWidgets.QPushButton("Delete Current LandCover", self)
-        self.del_contain_btn.setGeometry(X_base + 427, 429, 150, 23)
-        self.del_contain_btn.pressed.connect(self.del_pres_contain_attribution)
-
-        # Traffic question answer
-        # Traffic LandCover
-        self.traffic_ans_landcover.addItems(
-            ["LandCover Class"] + self.traffic_landcover_list
-        )
-        self.traffic_ans_landcover.setGeometry(X_base + 37, 340, 120 + 80, 23)
-        self.traffic_ans_landcover.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.traffic_ans_landcover.currentIndexChanged.connect(self.get_traffic_object)
-        self.traffic_ans_landcover.currentIndexChanged.connect(
-            self.get_current_traffic_landcover
-        )
-
-        # Traffic object
-        self.traffic_ans_object.addItems(["Subset Class"])
-        self.traffic_ans_object.setGeometry(X_base + 167 + 80, 340, 120 + 80, 23)
-        self.traffic_ans_object.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.traffic_ans_object.currentIndexChanged.connect(
-            self.show_pre_traffic_attribution
-        )
-
-        # Traffic number
-        self.traffic_ans_number.addItems(
-            [
-                "Number",
-                "none",
-                "1",
-                "2",
-                "3",
-                "4",
-                "5",
-                "6",
-                "6-10",
-                "10-20",
-                "20-40",
-                "40-100",
-                "> 100",
-            ]
-        )
-        self.traffic_ans_number.setGeometry(X_base + 297 + 160, 340, 120 + 20, 23)
-        self.traffic_ans_number.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Traffic location
-        self.traffic_ans_location.addItems(
-            [
-                "Location",
-                "none",
-                "top",
-                "bottom",
-                "left",
-                "right",
-                "central",
-                "upper left",
-                "upper right",
-                "lower left",
-                "lower right",
-                "almost all the picture",
-            ]
-        )
-        self.traffic_ans_location.setGeometry(X_base + 37, 373, 120 + 80, 23)
-        self.traffic_ans_location.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Traffic better
-        self.traffic_ans_better.addItems(
-            ["Quality", "optical", "thermal", "almost same"]
-        )
-        self.traffic_ans_better.setGeometry(X_base + 167 + 80, 373, 120 + 80, 23)
-        self.traffic_ans_better.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Confirm input
-        self.submit_traffic.setGeometry(X_base + 167, 373, 120, 23)
-        self.submit_traffic.pressed.connect(self.join_traffic)
-
-        # Finish input
-        self.generate_traffic_btn = QtWidgets.QPushButton("Finish Input", self)
-        self.generate_traffic_btn.setGeometry(X_base + 297, 373, 120, 23)
-        self.generate_traffic_btn.pressed.connect(self.generate_traffic)
-
-        # Delete current traffic landcover
-        self.del_traffic_btn = QtWidgets.QPushButton("Delete Current Traffic LandCover", self)
-        self.del_traffic_btn.setGeometry(X_base + 427, 373, 150, 23)
-        self.del_traffic_btn.pressed.connect(self.del_traffic_attribution)
-
-        # Residential question answer
-        # Residential Landcover
-        self.residential_ans_landcover.addItems(
-            ["LandCover Class"] + self.residential_landcover_list
-        )
-        self.residential_ans_landcover.setGeometry(X_base + 37, 380, 120 + 80, 23)
-        self.residential_ans_landcover.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.residential_ans_landcover.currentIndexChanged.connect(
-            self.get_residential_object
-        )
-        self.residential_ans_landcover.currentIndexChanged.connect(
-            self.get_current_residential_landcover
-        )
-
-        # Residential object
-        self.residential_ans_object.addItems(
-            ["Subset Class"] + self.residential_object_list
-        )
-        self.residential_ans_object.setGeometry(X_base + 167 + 80, 380, 120 + 80, 23)
-        self.residential_ans_object.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-        self.residential_ans_object.currentIndexChanged.connect(
-            self.show_pre_residential_attribution
-        )
-
-        # Residential number
-        self.residential_ans_number.addItems(
-            [
-                "Number",
-                "none",
-                "1",
-                "2",
-                "3",
-                "4",
-                "5",
-                "6",
-                "6-10",
-                "10-20",
-                "20-40",
-                "40-100",
-                "> 100",
-            ]
-        )
-        self.residential_ans_number.setGeometry(X_base + 297 + 160, 380, 120 + 20, 23)
-        self.residential_ans_number.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Residential location
-        # self.residential_ans_location.addItems(
-        #     [
-        #         "Location",
-        #         "top interior",
-        #         "bottom interior",
-        #         "left interior",
-        #         "right interior",
-        #         "top-left interior",
-        #         "top-right interior",
-        #         "bottom-left interior",
-        #         "bottom-right interior",
-        #         "central interior",
-        #         "top exterior",
-        #         "bottom exterior",
-        #         "left exterior",
-        #         "right exterior",
-        #         "top-left exterior",
-        #         "top-right exterior",
-        #         "bottom-left exterior",
-        #         "bottom-right exterior",
-        #         "almost all the picture",
-        #     ]
-        # )
-        self.residential_ans_location.addItems(
-            [
-                "Location",
-                "none",
-                "top",
-                "bottom",
-                "left",
-                "right",
-                "central",
-                "upper left",
-                "upper right",
-                "lower left",
-                "lower right",
-                "almost all the picture",
-            ]
-        )
-        self.residential_ans_location.setGeometry(X_base + 37, 413, 120 + 80, 23)
-        self.residential_ans_location.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Residential better
-        self.residential_ans_better.addItems(
-            ["Quality", "optical", "thermal", "almost same"]
-        )
-        self.residential_ans_better.setGeometry(X_base + 167 + 80, 413, 120 + 80, 23)
-        self.residential_ans_better.setStyleSheet(
-            "font-size: 16px;font-weight: bold;background-color: white"
-        )
-
-        # Confirm input
-        self.submit_residential.setGeometry(X_base + 167, 413, 120, 23)
-        self.submit_residential.pressed.connect(self.join_residential)
-
-        # Finish input
-        self.generate_residential_btn = QtWidgets.QPushButton("Finish Input", self)
-        self.generate_residential_btn.setGeometry(X_base + 297, 413, 120, 23)
-        self.generate_residential_btn.pressed.connect(self.generate_residential)
-
-        # Delete current residential landcover
-        self.del_residential_btn = QtWidgets.QPushButton(
-            "Delete Current Residential LandCover", self
-        )
-        self.del_residential_btn.setGeometry(X_base + 427, 413, 150, 23)
-        self.del_residential_btn.pressed.connect(self.del_residential_attribution)
-
-        # Deduce question: give your own question and answer
-        self.Deduce_Qst_one.setGeometry(X_base + 37, 500, 320, 23)
-        self.Deduce_Qst_one.setStyleSheet("font-size:15px")
-        self.Deduce_Ans_one.setGeometry(X_base + 365, 500, 80, 23)
-        self.Deduce_Ans_one.setStyleSheet("font-size:15px")
-
-        self.Deduce_Qst_two.setGeometry(X_base + 37, 530, 320, 23)
-        self.Deduce_Qst_two.setStyleSheet("font-size:15px")
-        self.Deduce_Ans_two.setGeometry(X_base + 365, 530, 80, 23)
-        self.Deduce_Ans_two.setStyleSheet("font-size:15px")
-
-        # Question submit button
-        self.submit_one_btn = QtWidgets.QPushButton("submit first", self)
-        self.submit_one_btn.setGeometry(X_base + 37, 565, 140, 25)
-        self.submit_one_btn.setStyleSheet("font-size:17px;font-weight:bold")
-        self.submit_one_btn.pressed.connect(self.ans_deduce_one)
-
-        self.submit_two_btn = QtWidgets.QPushButton("submit second", self)
-        self.submit_two_btn.setGeometry(X_base + 217, 565, 140, 25)
-        self.submit_two_btn.setStyleSheet("font-size:17px;font-weight:bold")
-        self.submit_two_btn.pressed.connect(self.ans_deduce_two)
-
-        # Switch image button
-
-        # Previous image: Pre
-        self.Pre_btn.setGeometry(X_base + 37, 650, 80, 30)
-        self.Pre_btn.setStyleSheet("font-size:19px;font-weight:bold")
-        self.Pre_btn.clicked.connect(self.show_prev_image)
-
-        # Next image: Next
-        self.Next_btn.setGeometry(X_base + 137, 650, 80, 30)
-        self.Next_btn.setStyleSheet("font-size:19px;font-weight:bold")
-        self.Next_btn.clicked.connect(self.show_next_image)
-
-        # Submit current file
-        self.Sub_btn.setGeometry(X_base + 237, 650, 80, 30)
-        self.Sub_btn.setStyleSheet("font-size:19px;font-weight:bold")
-        self.Sub_btn.clicked.connect(self.submit_annotation)
-        # Generate annotation file
-        self.Gen_btn.setGeometry(X_base + 337, 650, 100, 30)
-        self.Gen_btn.setStyleSheet("font-size:19px;font-weight:bold")
-        self.Gen_btn.clicked.connect(self.generate_annotation)
-
-        # Add question and answer widgets to the scroll area
-        self.scroll_layout.addWidget(self.question_headline)
-        self.scroll_layout.addWidget(self.question_Match)
-        self.scroll_layout.addWidget(self.Match_pick_box)
-        self.scroll_layout.addWidget(self.Mist_pick_box)
-        self.scroll_layout.addWidget(self.night_pick_box)
-
-        self.scroll_layout.addWidget(self.question_theme)
-        self.scroll_layout.addWidget(self.theme_ans_r)
-        self.scroll_layout.addWidget(self.theme_ans_ur)
-
-        self.scroll_layout.addWidget(self.question_dis_loc)
-        self.scroll_layout.addWidget(self.dis_loc_ans_loc_a)
-        self.scroll_layout.addWidget(self.dis_loc_is_cluster_a)
-        self.scroll_layout.addWidget(self.dis_loc_ans_object_a)
-        self.scroll_layout.addWidget(self.dis_loc_ans_loc_b)
-        self.scroll_layout.addWidget(self.dis_loc_is_cluster_b)
-        self.scroll_layout.addWidget(self.dis_loc_ans_object_b)
-        self.scroll_layout.addWidget(self.dis_loc_ans_distance)
-        self.scroll_layout.addWidget(self.dis_loc_ans_location)
-        self.scroll_layout.addWidget(self.submit_dis_loc)
-        self.scroll_layout.addWidget(self.open_dis_loc)
-        self.scroll_layout.addWidget(self.generate_dis_loc_btn)
-
-        self.scroll_layout.addWidget(self.question_contain)
-        self.scroll_layout.addWidget(self.contain_ans_landcover)
-        self.scroll_layout.addWidget(self.contain_ans_subset)
-        self.scroll_layout.addWidget(self.contain_ans_number)
-        self.scroll_layout.addWidget(self.contain_ans_location)
-        self.scroll_layout.addWidget(self.contain_ans_shape)
-        self.scroll_layout.addWidget(self.contain_ans_Area)
-        self.scroll_layout.addWidget(self.contain_ans_length)
-        self.scroll_layout.addWidget(self.contain_ans_distribution)
-        self.scroll_layout.addWidget(self.contain_ans_better)
-        self.scroll_layout.addWidget(self.submit_contain)
-        self.scroll_layout.addWidget(self.open_contain)
-        self.scroll_layout.addWidget(self.generate_contain_btn)
-        self.scroll_layout.addWidget(self.del_contain_btn)
-
-        self.scroll_layout.addWidget(self.question_deduce)
-        self.scroll_layout.addWidget(self.Deduce_Qst_one)
-        self.scroll_layout.addWidget(self.Deduce_Ans_one)
-        self.scroll_layout.addWidget(self.Deduce_Qst_two)
-        self.scroll_layout.addWidget(self.Deduce_Ans_two)
-        self.scroll_layout.addWidget(self.submit_one_btn)
-        self.scroll_layout.addWidget(self.submit_two_btn)
-
-        self.scroll_layout.addWidget(self.question_traffic)
-        self.scroll_layout.addWidget(self.traffic_ans_landcover)
-        self.scroll_layout.addWidget(self.traffic_ans_object)
-        self.scroll_layout.addWidget(self.traffic_ans_number)
-        self.scroll_layout.addWidget(self.traffic_ans_location)
-        self.scroll_layout.addWidget(self.traffic_ans_better)
-        self.scroll_layout.addWidget(self.submit_traffic)
-        self.scroll_layout.addWidget(self.generate_traffic_btn)
-        self.scroll_layout.addWidget(self.del_traffic_btn)
-
-        self.scroll_layout.addWidget(self.question_residential)
-        self.scroll_layout.addWidget(self.residential_ans_landcover)
-        self.scroll_layout.addWidget(self.residential_ans_object)
-        self.scroll_layout.addWidget(self.residential_ans_number)
-        self.scroll_layout.addWidget(self.residential_ans_location)
-        self.scroll_layout.addWidget(self.residential_ans_better)
-        self.scroll_layout.addWidget(self.submit_residential)
-        self.scroll_layout.addWidget(self.generate_residential_btn)
-        self.scroll_layout.addWidget(self.del_residential_btn)
-
-        self.scroll_layout.addWidget(self.question_agricultural)
-        self.scroll_layout.addWidget(self.agricultural_ans_road)
-        self.scroll_layout.addWidget(self.agricultural_ans_water)
-
-        self.scroll_layout.addWidget(self.question_industrial)
-        self.scroll_layout.addWidget(self.industrial_ans_facility)
-        self.scroll_layout.addWidget(self.industrial_ans_scale)
-        self.scroll_layout.addWidget(self.industrial_ans_location)
-
-        self.scroll_layout.addWidget(self.question_uav)
-        self.scroll_layout.addWidget(self.uav_ans_height)
-        self.scroll_layout.addWidget(self.uav_ans_angle)
-
-        self.scroll_layout.addWidget(self.Pre_btn)
-        self.scroll_layout.addWidget(self.Next_btn)
-        self.scroll_layout.addWidget(self.Sub_btn)
-        self.scroll_layout.addWidget(self.Gen_btn)
-
-        # Style settings
-        self.setStyleSheet(
-            "QPushButton#blueButton:hover:pressed {background-color: #0D47A1;}"
-            "QLabel#selectedFolderLabel {background-color: white;border: 1px solid #aaa;font-size:15px}"
-            "QLabel#headline {font-weight: bold;font-size: 15px}"
-            "QCheckbox#Qst {font-size:19px;font-family: SimHei}"
-        )
-
-    # Join attribute dictionary and update attribute dictionary
-    def join_attribute_dict(self, key, value):
-        if self.flag == True:
-            if len(value) > 0:
-                self.current_attri_dict[key] = value
-                self.display_attribution()
-
-    def del_attribute_dict(self, key):
-        if self.flag == True:
-            if key in self.current_attri_dict:
-                self.current_attri_dict.pop(key)
-                self.display_attribution()
-
-    def del_pres_contain_attribution(self):
-        if self.flag == True:
-            if "PresContain" in self.current_attri_dict:
-                if self.current_landcover in self.current_attri_dict["PresContain"]:
-                    self.current_attri_dict["PresContain"].pop(self.current_landcover)
-        # Display the attribute information of the submitted objects
-        if len(self.contain_dict) > 0:
-            self.display_anno.clear()
-            for k, v in self.contain_dict.items():
-                if len(v) > 0:
-                    for s in v:
-                        self.display_anno.append(
-                            "Con&&Pre (%s:%s): Num %s, Loc %s, Shape %s, Area %s, Len %s, Distri %s, Better %s"
-                            % (
-                                k,
-                                s[0][1],
-                                s[1][1],
-                                s[2][1],
-                                s[3][1],
-                                s[4][1],
-                                s[5][1],
-                                s[6][1],
-                                s[7][1],
-                            )
-                        )
-
-    def del_traffic_attribution(self):
-        if self.flag == True:
-            if "Traffic" in self.current_attri_dict:
-                if self.current_traffic_landcover in self.current_attri_dict["Traffic"]:
-                    self.current_attri_dict["Traffic"].pop(
-                        self.current_traffic_landcover
-                    )
-        # Update display
-        if len(self.traffic_dict) > 0:
-            self.display_anno.clear()
-            for k, v in self.traffic_dict.items():
-                if len(v) > 0:
-                    for s in v:
-                        # Display traffic annotation, Num, Loc, Better
-                        self.display_anno.append(
-                            "Traffic (%s:%s): Num %s, Loc %s, Better %s"
-                            % (k, s[0][1], s[1][1], s[2][1], s[3][1])
-                        )
-
-    def del_residential_attribution(self):
-        if self.flag == True:
-            if "Residential" in self.current_attri_dict:
-                if (
-                    self.current_residential_landcover
-                    in self.current_attri_dict["Residential"]
-                ):
-                    self.current_attri_dict["Residential"].pop(
-                        self.current_residential_landcover
-                    )
-        if len(self.residential_dict) > 0:
-            self.display_anno.clear()
-            for k, v in self.residential_dict.items():
-                if len(v) > 0:
-                    for s in v:
-                        self.display_anno.append(
-                            "Residential (%s:%s): Num %s, Loc %s, Better %s"
-                            % (k, s[0][1], s[1][1], s[2][1], s[3][1])
-                        )
-
-    # Define the function corresponding to each question
-    def ans_match(self):
-        # The checkbox of match is selected, and the answer in self.Match_pick_box is selected
-        # self.Match_pick_box.addItems(['Please choose','Yes','No','Almost match'])
-        if self.question_Match.isChecked() and self.Match_pick_box.currentIndex() != 0:
-
-            tri_list = []
-            qst = "How is the matching situation in these two pictures ?"
-            ans = self.Match_pick_box.currentText()
-            tri_list.append(qst)
-            tri_list.append(ans)
-            self.jion_current_dict("11", tri_list)
-            self.join_attribute_dict("match", ans)
-
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff) # Hide horizontal scrollbar
+
+        self.scroll_content_widget = QWidget() # A QWidget to hold the layout
+        self.scroll_area.setWidget(self.scroll_content_widget)
+        self.annotation_panel_layout = QVBoxLayout(self.scroll_content_widget) # QVBoxLayout for vertical stacking
+
+        # --- Populate Annotation Panel ---
+        self.annotation_panel_layout.addWidget(self.question_headline)
+
+        # Match & Weather
+        self.annotation_panel_layout.addWidget(self.chk_match)
+        self.match_options_box.addItems(["Select Match", "almost match", "partial match", "not match"])
+        self.annotation_panel_layout.addWidget(self.match_options_box)
+        self.mist_options_box.addItems(["Select Mist", "mist", "not mist", "not sure"])
+        self.annotation_panel_layout.addWidget(self.mist_options_box)
+        self.night_options_box.addItems(["Select Darkness", "dark", "not dark", "not sure"])
+        self.annotation_panel_layout.addWidget(self.night_options_box)
+        self.chk_match.stateChanged.connect(self._update_match_attributes)
+        self.match_options_box.currentIndexChanged.connect(self._update_match_attributes)
+        self.mist_options_box.currentIndexChanged.connect(self._update_match_attributes)
+        self.night_options_box.currentIndexChanged.connect(self._update_match_attributes)
+
+
+        # Scene Theme
+        self.annotation_panel_layout.addWidget(self.chk_theme)
+        self.theme_residential_box.addItems(["Residential Area?", "Residential", "n-Residential"])
+        self.annotation_panel_layout.addWidget(self.theme_residential_box)
+        self.theme_urban_rural_box.addItems(["Urban/Rural?", "Urban", "Rural"])
+        self.annotation_panel_layout.addWidget(self.theme_urban_rural_box)
+        self.chk_theme.stateChanged.connect(self._update_theme_attributes)
+        self.theme_residential_box.currentIndexChanged.connect(self._update_theme_attributes)
+        self.theme_urban_rural_box.currentIndexChanged.connect(self._update_theme_attributes)
+
+
+        # Distance/Location
+        self.annotation_panel_layout.addWidget(self.chk_dis_loc)
+        self.disloc_pos_a_box.addItems(["Position A", "none", "top", "bottom", "left", "right", "center", "top left", "top right", "bottom left", "bottom right"])
+        self.annotation_panel_layout.addWidget(self.disloc_pos_a_box)
+        self.disloc_cluster_a_box.addItems(["Is A cluster?", "none", "cluster"])
+        self.annotation_panel_layout.addWidget(self.disloc_cluster_a_box)
+        # self.subset_list is defined in __init__
+        object_categories = ["Object A"] + self.LC2SubList["building"][1:] + self.LC2SubList["vegetation area"][1:] + self.LC2SubList["water area"][1:] + self.LC2SubList["road"][1:] + ["agricultural area", "wasteland", "intersection", "parking area", "park", "concrete floor"] + self.LC2SubList["sports field"][1:] + ["pier", "beach", "airport", "apron"]
+        self.disloc_obj_a_box.addItems(list(dict.fromkeys(object_categories))) # Remove duplicates
+        self.annotation_panel_layout.addWidget(self.disloc_obj_a_box)
+
+        self.disloc_pos_b_box.addItems(["Position B", "none", "top", "bottom", "left", "right", "center", "top left", "top right", "bottom left", "bottom right"])
+        self.annotation_panel_layout.addWidget(self.disloc_pos_b_box)
+        self.disloc_cluster_b_box.addItems(["Is B cluster?", "none", "cluster"])
+        self.annotation_panel_layout.addWidget(self.disloc_cluster_b_box)
+        object_categories_b = ["Object B"] + self.LC2SubList["building"][1:] + self.LC2SubList["vegetation area"][1:] + self.LC2SubList["water area"][1:] + self.LC2SubList["road"][1:] + ["agricultural area", "wasteland", "intersection", "parking area", "park", "concrete floor"] + self.LC2SubList["sports field"][1:] + ["pier", "beach", "airport", "apron"]
+        self.disloc_obj_b_box.addItems(list(dict.fromkeys(object_categories_b)))
+        self.annotation_panel_layout.addWidget(self.disloc_obj_b_box)
+
+        self.disloc_distance_box.addItems(["A-B Distance (units)", "none", "next to", "0-25", "25-50", "50-75", "75-100", "100-125", "125-150", "150-175", "175-200", "200+"])
+        self.annotation_panel_layout.addWidget(self.disloc_distance_box)
+        self.disloc_relation_box.addItems(["B's pos relative to A"] + self.location_options)
+        self.annotation_panel_layout.addWidget(self.disloc_relation_box)
+        self.annotation_panel_layout.addWidget(self.btn_measure_distance)
+        self.annotation_panel_layout.addWidget(self.btn_submit_disloc)
+        self.annotation_panel_layout.addWidget(self.btn_finish_disloc)
+        self.chk_dis_loc.stateChanged.connect(self._handle_disloc_state_change)
+        self.btn_submit_disloc.clicked.connect(self._confirm_disloc_pair)
+        self.btn_measure_distance.clicked.connect(self.trigger_distance_measurement)
+        self.btn_finish_disloc.clicked.connect(self._finalize_disloc_attributes)
+
+
+        # Contain/Presence
+        self.annotation_panel_layout.addWidget(self.chk_contain)
+        initial_landcovers = ["LandCover Class"] + list(self.LC2SubList.keys())[:-1] # Exclude the placeholder
+        self.contain_landcover_box.addItems(initial_landcovers)
+        self.annotation_panel_layout.addWidget(self.contain_landcover_box)
+        self.contain_subset_box.addItems(["Subset Class"]) # Populated dynamically
+        self.annotation_panel_layout.addWidget(self.contain_subset_box)
+        self.contain_number_box.addItems(["Number", "none", "1", "2", "3", "4", "5", "6", "6-10", "10-20", "20-40", "40-100", "> 100"])
+        self.annotation_panel_layout.addWidget(self.contain_number_box)
+        self.contain_location_box.addItems(["Location", "none", "top", "bottom", "left", "right", "center", "upper left", "upper right", "lower left", "lower right", "almost all the picture"])
+        self.annotation_panel_layout.addWidget(self.contain_location_box)
+        self.contain_shape_box.addItems(["Shape", "none", "Straight", "Curved", "Triangle", "Square", "Rectangle", "other quadrilater", "Rotundity", "other shape"])
+        self.annotation_panel_layout.addWidget(self.contain_shape_box)
+        self.contain_area_box.addItems(["Area (units^2)", "none", "0-100", "100-500", "500-1000", "1000-5000", "5000-10000", "10000+"]) # Simplified
+        self.annotation_panel_layout.addWidget(self.contain_area_box)
+        self.contain_length_box.addItems(["Length (units)", "none", "0-25", "25-50", "50-100", "100-200", "200+"]) # Simplified
+        self.annotation_panel_layout.addWidget(self.contain_length_box)
+        self.contain_distribution_box.addItems(["Distribution", "none", "Clustered", "Isolated", "Dense", "Random", "Uniform"])
+        self.annotation_panel_layout.addWidget(self.contain_distribution_box)
+        self.contain_quality_box.addItems(["Image Quality", "optical", "thermal", "almost same"])
+        self.annotation_panel_layout.addWidget(self.contain_quality_box)
+        self.annotation_panel_layout.addWidget(self.btn_measure_area)
+        self.annotation_panel_layout.addWidget(self.btn_submit_contain)
+        self.annotation_panel_layout.addWidget(self.btn_delete_contain_landcover)
+        self.annotation_panel_layout.addWidget(self.btn_finish_contain)
+        self.chk_contain.stateChanged.connect(self._handle_contain_state_change)
+        self.contain_landcover_box.currentIndexChanged.connect(self._populate_contain_subset_box)
+        self.contain_landcover_box.currentIndexChanged.connect(self._update_current_landcover_for_delete_contain)
+        self.contain_subset_box.currentIndexChanged.connect(self._load_existing_contain_attributes)
+        self.btn_submit_contain.clicked.connect(self._confirm_contain_item)
+        self.btn_measure_area.clicked.connect(self.trigger_area_measurement)
+        self.btn_delete_contain_landcover.clicked.connect(self._delete_single_contain_landcover_attributes)
+        self.btn_finish_contain.clicked.connect(self._finalize_contain_attributes)
+
+
+        # Deduce (Custom Attributes)
+        self.annotation_panel_layout.addWidget(self.chk_deduce)
+        self.annotation_panel_layout.addWidget(self.deduce_q1_input)
+        self.annotation_panel_layout.addWidget(self.deduce_a1_input)
+        self.annotation_panel_layout.addWidget(self.btn_submit_deduce1)
+        self.annotation_panel_layout.addWidget(self.deduce_q2_input)
+        self.annotation_panel_layout.addWidget(self.deduce_a2_input)
+        self.annotation_panel_layout.addWidget(self.btn_submit_deduce2)
+        self.chk_deduce.stateChanged.connect(self._handle_deduce_state_change)
+        self.btn_submit_deduce1.clicked.connect(self._update_deduce_attribute_one)
+        self.btn_submit_deduce2.clicked.connect(self._update_deduce_attribute_two)
+
+
+        # Traffic Elements
+        self.annotation_panel_layout.addWidget(self.chk_traffic)
+        initial_traffic_landcovers = ["Traffic Category"] + list(self.TR2ObjList.keys())[:-1]
+        self.traffic_landcover_box.addItems(initial_traffic_landcovers)
+        self.annotation_panel_layout.addWidget(self.traffic_landcover_box)
+        self.traffic_object_box.addItems(["Traffic Object"]) # Populated dynamically
+        self.annotation_panel_layout.addWidget(self.traffic_object_box)
+        self.traffic_number_box.addItems(["Number", "none", "1", "2", "3", "4", "5", "6", "6-10", "10-20", "20-40", ">40"])
+        self.annotation_panel_layout.addWidget(self.traffic_number_box)
+        self.traffic_location_box.addItems(["Location", "none", "top", "bottom", "left", "right", "center", "multiple"])
+        self.annotation_panel_layout.addWidget(self.traffic_location_box)
+        self.traffic_quality_box.addItems(["Image Quality", "optical", "thermal", "almost same"])
+        self.annotation_panel_layout.addWidget(self.traffic_quality_box)
+        self.annotation_panel_layout.addWidget(self.btn_submit_traffic)
+        self.annotation_panel_layout.addWidget(self.btn_delete_traffic_landcover)
+        self.annotation_panel_layout.addWidget(self.btn_finish_traffic)
+        self.chk_traffic.stateChanged.connect(self._handle_traffic_state_change)
+        self.traffic_landcover_box.currentIndexChanged.connect(self._populate_traffic_object_box)
+        self.traffic_landcover_box.currentIndexChanged.connect(self._update_current_landcover_for_delete_traffic)
+        self.traffic_object_box.currentIndexChanged.connect(self._load_existing_traffic_attributes)
+        self.btn_submit_traffic.clicked.connect(self._confirm_traffic_item)
+        self.btn_delete_traffic_landcover.clicked.connect(self._delete_single_traffic_landcover_attributes)
+        self.btn_finish_traffic.clicked.connect(self._finalize_traffic_attributes)
+
+
+        # Residential Elements
+        self.annotation_panel_layout.addWidget(self.chk_residential)
+        initial_residential_landcovers = ["Residential Category"] + list(self.RA2ObjList.keys())[:-1]
+        self.residential_landcover_box.addItems(initial_residential_landcovers)
+        self.annotation_panel_layout.addWidget(self.residential_landcover_box)
+        self.residential_object_box.addItems(["Residential Object"]) # Populated dynamically
+        self.annotation_panel_layout.addWidget(self.residential_object_box)
+        self.residential_number_box.addItems(["Number", "none", "1", "2", "3", "4", "5", "6-10", ">10"])
+        self.annotation_panel_layout.addWidget(self.residential_number_box)
+        self.residential_location_box.addItems(["Location", "none", "top", "bottom", "left", "right", "center", "multiple"])
+        self.annotation_panel_layout.addWidget(self.residential_location_box)
+        self.residential_quality_box.addItems(["Image Quality", "optical", "thermal", "almost same"])
+        self.annotation_panel_layout.addWidget(self.residential_quality_box)
+        self.annotation_panel_layout.addWidget(self.btn_submit_residential)
+        self.annotation_panel_layout.addWidget(self.btn_delete_residential_landcover)
+        self.annotation_panel_layout.addWidget(self.btn_finish_residential)
+        self.chk_residential.stateChanged.connect(self._handle_residential_state_change)
+        self.residential_landcover_box.currentIndexChanged.connect(self._populate_residential_object_box)
+        self.residential_landcover_box.currentIndexChanged.connect(self._update_current_landcover_for_delete_residential)
+        self.residential_object_box.currentIndexChanged.connect(self._load_existing_residential_attributes)
+        self.btn_submit_residential.clicked.connect(self._confirm_residential_item)
+        self.btn_delete_residential_landcover.clicked.connect(self._delete_single_residential_landcover_attributes)
+        self.btn_finish_residential.clicked.connect(self._finalize_residential_attributes)
+
+
+        # Agricultural Features
+        self.annotation_panel_layout.addWidget(self.chk_agricultural)
+        self.agri_road_box.addItems(["Agricultural Road?", "Yes", "No", "Not Applicable"])
+        self.annotation_panel_layout.addWidget(self.agri_road_box)
+        self.agri_water_box.addItems(["Agricultural Water?", "Yes", "No", "Not Applicable"])
+        self.annotation_panel_layout.addWidget(self.agri_water_box)
+        self.chk_agricultural.stateChanged.connect(self._update_agricultural_attributes)
+        self.agri_road_box.currentIndexChanged.connect(self._update_agricultural_attributes)
+        self.agri_water_box.currentIndexChanged.connect(self._update_agricultural_attributes)
+
+
+        # Industrial Features
+        self.annotation_panel_layout.addWidget(self.chk_industrial)
+        self.ind_facility_box.addItems(["Industrial Facility?", "Yes", "No", "Not Applicable"])
+        self.annotation_panel_layout.addWidget(self.ind_facility_box)
+        self.ind_scale_box.addItems(["Industrial Scale", "small", "medium", "large", "Not Applicable"])
+        self.annotation_panel_layout.addWidget(self.ind_scale_box)
+        self.ind_location_box.addItems(["Industrial Location"] + self.location_options + ["center", "Not Applicable"])
+        self.annotation_panel_layout.addWidget(self.ind_location_box)
+        self.chk_industrial.stateChanged.connect(self._update_industrial_attributes)
+        self.ind_facility_box.currentIndexChanged.connect(self._update_industrial_attributes)
+        self.ind_scale_box.currentIndexChanged.connect(self._update_industrial_attributes)
+        self.ind_location_box.currentIndexChanged.connect(self._update_industrial_attributes)
+
+
+        # UAV Parameters
+        self.annotation_panel_layout.addWidget(self.chk_uav)
+        self.uav_height_box.addItems(["UAV Height (m)", "150-250", "250-400", "400-550", "none", "Not Applicable"])
+        self.annotation_panel_layout.addWidget(self.uav_height_box)
+        self.uav_angle_box.addItems(["UAV Angle", "vertical", "oblique", "Not Applicable"])
+        self.annotation_panel_layout.addWidget(self.uav_angle_box)
+        self.chk_uav.stateChanged.connect(self._update_uav_attributes)
+        self.uav_height_box.currentIndexChanged.connect(self._update_uav_attributes)
+        self.uav_angle_box.currentIndexChanged.connect(self._update_uav_attributes)
+
+
+        # --- Navigation and File Operations Buttons (bottom of scroll panel or fixed area) ---
+        # For simplicity, adding them to the scroll layout. For fixed position, place outside scroll_area.
+        self.annotation_panel_layout.addSpacing(30) # Add some space before final buttons
+        self.annotation_panel_layout.addWidget(self.btn_previous_image)
+        self.annotation_panel_layout.addWidget(self.btn_next_image)
+        self.annotation_panel_layout.addWidget(self.btn_submit_all_current)
+        self.annotation_panel_layout.addWidget(self.btn_generate_file)
+
+        self.btn_previous_image.clicked.connect(self.show_previous_image)
+        self.btn_next_image.clicked.connect(self.show_next_image)
+        self.btn_submit_all_current.clicked.connect(self.save_current_image_annotations_to_memory)
+        self.btn_generate_file.clicked.connect(self.save_all_annotations_to_file)
+
+
+        # --- Styling ---
+        # Apply some basic styling for better appearance
+        common_button_style = "font-size: 14px; padding: 5px;"
+        self.browse_button_rgb.setStyleSheet(common_button_style)
+        self.browse_button_tir.setStyleSheet(common_button_style)
+        self.browse_button_save.setStyleSheet(common_button_style)
+        self.btn_previous_image.setStyleSheet(common_button_style + "font-weight:bold;")
+        self.btn_next_image.setStyleSheet(common_button_style + "font-weight:bold;")
+        self.btn_submit_all_current.setStyleSheet(common_button_style + "background-color: #D3E3FD;") # Light blue
+        self.btn_generate_file.setStyleSheet(common_button_style + "background-color: #C8E6C9; font-weight:bold;") # Light green
+
+        label_style = "font-weight: bold; font-size: 13px;"
+        self.headline_folder_rgb.setStyleSheet(label_style)
+        self.headline_folder_tir.setStyleSheet(label_style)
+        self.headline_folder_save.setStyleSheet(label_style)
+        self.question_headline.setStyleSheet(label_style + "font-size: 15px; margin-bottom: 10px;")
+
+        self.selected_folder_label_rgb.setStyleSheet("background-color: white; border: 1px solid #ccc; padding: 2px;")
+        self.selected_folder_label_tir.setStyleSheet("background-color: white; border: 1px solid #ccc; padding: 2px;")
+        self.selected_folder_label_save.setStyleSheet("background-color: white; border: 1px solid #ccc; padding: 2px;")
+
+        checkbox_style = "font-size: 14px; font-weight: bold; margin-top: 10px; margin-bottom: 5px;"
+        for chk_box in self.all_checkboxes:
+            chk_box.setStyleSheet(checkbox_style)
+
+        combobox_style = "font-size: 13px; background-color: white; padding: 3px;"
+        lineedit_style = "font-size: 13px; padding: 3px;"
+        for widget in self.all_comboboxes_and_lineedits:
+            if isinstance(widget, QComboBox):
+                widget.setStyleSheet(combobox_style)
+            elif isinstance(widget, QLineEdit):
+                widget.setStyleSheet(lineedit_style)
+        # Specific button styles for annotation panel
+        action_button_style = "font-size: 13px; padding: 4px; margin-top: 5px;"
+        self.btn_submit_disloc.setStyleSheet(action_button_style)
+        self.btn_measure_distance.setStyleSheet(action_button_style)
+        self.btn_finish_disloc.setStyleSheet(action_button_style + "background-color: #FFECB3;") # Light yellow
+        self.btn_submit_contain.setStyleSheet(action_button_style)
+        self.btn_measure_area.setStyleSheet(action_button_style)
+        self.btn_finish_contain.setStyleSheet(action_button_style + "background-color: #FFECB3;")
+        self.btn_delete_contain_landcover.setStyleSheet(action_button_style + "background-color: #FFCDD2;") # Light red
+        self.btn_submit_deduce1.setStyleSheet(action_button_style)
+        self.btn_submit_deduce2.setStyleSheet(action_button_style)
+        self.btn_submit_traffic.setStyleSheet(action_button_style)
+        self.btn_finish_traffic.setStyleSheet(action_button_style + "background-color: #FFECB3;")
+        self.btn_delete_traffic_landcover.setStyleSheet(action_button_style + "background-color: #FFCDD2;")
+        self.btn_submit_residential.setStyleSheet(action_button_style)
+        self.btn_finish_residential.setStyleSheet(action_button_style + "background-color: #FFECB3;")
+        self.btn_delete_residential_landcover.setStyleSheet(action_button_style + "background-color: #FFCDD2;")
+
+
+    # --- Core Annotation Logic ---
+    def _add_or_update_attribute(self, key, value):
+        """Adds or updates an attribute in the current_image_attributes dictionary."""
+        if self.allow_modification:
+            if value is not None and value != "": # Allow empty string if intended
+                self.current_image_attributes[key] = value
+            elif key in self.current_image_attributes: # If value is None or empty, remove if exists
+                del self.current_image_attributes[key]
+            self._display_current_attributes_in_log()
+
+    def _remove_attribute(self, key):
+        """Removes an attribute if it exists."""
+        if self.allow_modification and key in self.current_image_attributes:
+            del self.current_image_attributes[key]
+            self._display_current_attributes_in_log()
+
+    def _display_current_attributes_in_log(self):
+        """Displays the currently collected attributes in the annotation log."""
+        self.display_anno_log.clear()
+        if not self.current_image_attributes:
+            self.display_anno_log.setText("No attributes selected for the current image.")
+            return
+
+        log_text = "Current Image Attributes:\n"
+        for key, value in sorted(self.current_image_attributes.items()):
+            if isinstance(value, dict): # For complex attributes like PresContain, Traffic
+                log_text += f"  {key}:\n"
+                for sub_key, sub_value_list in value.items():
+                    log_text += f"    - {sub_key}:\n"
+                    for item_attrs in sub_value_list: # item_attrs is a list of [index, text]
+                        # Format this more nicely, e.g., "AttributeName: Value"
+                        attr_strings = [f"{self._get_attr_name_for_log(key, idx, item_attrs[0])}: {item_attrs[1]}" for idx, item_attrs in enumerate(item_attrs)]
+                        log_text += f"        {', '.join(attr_strings)}\n"
+            elif isinstance(value, list) and key == "LocDis": # Special handling for LocDis list of lists
+                 log_text += f"  {key}:\n"
+                 for pair_attrs in value:
+                    # pair_attrs is [objA_text, objB_text, distance_idx, location_text, distance_text]
+                    log_text += f"    - Pair: ({pair_attrs[0]}) & ({pair_attrs[1]}), Loc: {pair_attrs[3]}, Dist: {pair_attrs[4]}\n"
+
+            else:
+                log_text += f"  {key}: {value}\n"
+        self.display_anno_log.setText(log_text)
+
+    def _get_attr_name_for_log(self, main_category, attr_index, attr_value_index):
+        """ Helper to get descriptive names for attributes in the log for complex types. """
+        # This needs to be customized based on the order of your QComboBoxes for each category
+        if main_category == "PresContain":
+            names = ["Subset", "Number", "Location", "Shape", "Area", "Length", "Distribution", "Quality"]
+            return names[attr_index] if attr_index < len(names) else f"Attr_{attr_index+1}"
+        elif main_category == "Traffic":
+            names = ["Object", "Number", "Location", "Quality"]
+            return names[attr_index] if attr_index < len(names) else f"Attr_{attr_index+1}"
+        elif main_category == "Residential":
+            names = ["Object", "Number", "Location", "Quality"]
+            return names[attr_index] if attr_index < len(names) else f"Attr_{attr_index+1}"
+        return f"Attr_{attr_index+1}"
+
+
+    # --- Category-Specific Attribute Handling Callbacks ---
+    def _update_match_attributes(self):
+        if self.chk_match.isChecked():
+            if self.match_options_box.currentIndex() > 0:
+                self._add_or_update_attribute("match_condition", self.match_options_box.currentText())
+            else:
+                self._remove_attribute("match_condition")
+
+            if self.mist_options_box.currentIndex() > 0:
+                self._add_or_update_attribute("mist_condition", self.mist_options_box.currentText())
+            else:
+                self._remove_attribute("mist_condition")
+
+            if self.night_options_box.currentIndex() > 0:
+                self._add_or_update_attribute("darkness_condition", self.night_options_box.currentText())
+            else:
+                self._remove_attribute("darkness_condition")
         else:
-            self.del_annotation(q_id="11")
-            self.del_attribute_dict("match")
+            self._remove_attribute("match_condition")
+            self._remove_attribute("mist_condition")
+            self._remove_attribute("darkness_condition")
 
-        if self.question_Match.isChecked() and self.Mist_pick_box.currentIndex() != 0:
-            ans = self.Mist_pick_box.currentText()
-            self.join_attribute_dict("mist", ans)
+    def _update_theme_attributes(self):
+        if self.chk_theme.isChecked():
+            if self.theme_residential_box.currentIndex() > 0:
+                self._add_or_update_attribute("area_type", self.theme_residential_box.currentText())
+            else:
+                self._remove_attribute("area_type")
+            if self.theme_urban_rural_box.currentIndex() > 0:
+                self._add_or_update_attribute("scene_macro_category", self.theme_urban_rural_box.currentText())
+            else:
+                self._remove_attribute("scene_macro_category")
         else:
-            self.del_attribute_dict("mist")
+            self._remove_attribute("area_type")
+            self._remove_attribute("scene_macro_category")
 
-        if self.question_Match.isChecked() and self.night_pick_box.currentIndex() != 0:
-            ans = self.night_pick_box.currentText()
-            self.join_attribute_dict("night", ans)
-        else:
-            self.del_attribute_dict("night")
+    def _handle_disloc_state_change(self):
+        if not self.chk_dis_loc.isChecked():
+            self._remove_attribute("LocDis")
+            self.dis_loc_details = {} # Clear temporary storage
+            self._display_current_attributes_in_log() # Update log
 
-        
+    def _all_disloc_options_selected(self):
+        """Checks if all required Distance/Location options for a pair are selected."""
+        return (self.disloc_pos_a_box.currentIndex() > 0 and
+                self.disloc_obj_a_box.currentIndex() > 0 and
+                self.disloc_cluster_a_box.currentIndex() > 0 and # Added check for cluster
+                self.disloc_pos_b_box.currentIndex() > 0 and
+                self.disloc_obj_b_box.currentIndex() > 0 and
+                self.disloc_cluster_b_box.currentIndex() > 0 and # Added check for cluster
+                self.disloc_distance_box.currentIndex() > 0 and
+                self.disloc_relation_box.currentIndex() > 0)
 
-    def ans_theme(self):
-        if self.question_theme.isChecked() and self.theme_ans_r.currentIndex() != 0:
-            tri_list_1 = []  # Store questions and answers
-            tri_list_2 = []
-            qst_1 = "What is the theme of this picture ?"
-            qst_2 = "Is it a residential area or a non-residential area ?"
-            if self.theme_ans_r.currentIndex() == 1:
-                ans = "residential area"
-            else:
-                ans = "non-residential area"
-            tri_list_1.append(qst_1)
-            tri_list_1.append(ans)
+    def _confirm_disloc_pair(self):
+        if self.chk_dis_loc.isChecked() and self._all_disloc_options_selected():
+            obj_a_base = self.disloc_obj_a_box.currentText()
+            obj_a_pos = self.disloc_pos_a_box.currentText()
+            obj_a_cluster = self.disloc_cluster_a_box.currentText()
+            obj_a_text = f"{'a cluster of ' if obj_a_cluster == 'cluster' else ''}{obj_a_base}"
+            if obj_a_pos != "none":
+                obj_a_text += f" at the {obj_a_pos} of the picture"
 
-            tri_list_2.append(qst_2)
-            tri_list_2.append(ans)
-            self.jion_current_dict("21", tri_list_1)
-            self.jion_current_dict("22", tri_list_2)
-            self.join_attribute_dict("theme", ans)
+            obj_b_base = self.disloc_obj_b_box.currentText()
+            obj_b_pos = self.disloc_pos_b_box.currentText()
+            obj_b_cluster = self.disloc_cluster_b_box.currentText()
+            obj_b_text = f"{'a cluster of ' if obj_b_cluster == 'cluster' else ''}{obj_b_base}"
+            if obj_b_pos != "none":
+                obj_b_text += f" at the {obj_b_pos} of the picture"
 
-        else:
-            self.del_annotation(q_id="21")
-            self.del_annotation(q_id="22")
-            self.del_attribute_dict("theme")
-
-        if self.question_theme.isChecked() and self.theme_ans_ur.currentIndex() != 0:
-            tri_list = []
-            qst = "Is it a rural or an urban area ?"
-            ans = self.theme_ans_ur.currentText()
-            tri_list.append(qst)
-            tri_list.append(ans)
-            self.jion_current_dict("23", tri_list)
-            self.join_attribute_dict("urban", ans)
-        else:
-            self.del_annotation(q_id="23")
-            self.del_attribute_dict("urban")
-
-    def del_dis_loc(self):
-        if not self.question_dis_loc.isChecked():
-            self.del_annotation(q="3")
-            self.del_attribute_dict("LocDis")
-            self.dis_loc_dict = {}
-
-    def ans_deduce_one(self):
-        if (
-            self.question_deduce.isChecked()
-            and self.Deduce_Qst_one.text() not in "Enter your question 1 (one-word answer)"
-            and self.Deduce_Ans_one.text() not in "Enter answer"
-        ):
-            qst = self.Deduce_Qst_one.text()
-            ans = self.Deduce_Ans_one.text()
-            tri_list = [qst, ans]
-            self.join_attribute_dict("Deduce_one", tri_list)
-            self.jion_current_dict("51", tri_list)
-
-    def ans_deduce_two(self):
-        if (
-            self.question_deduce.isChecked()
-            and self.Deduce_Qst_two.text() not in "Enter your question 2 (one-word answer)"
-            and self.Deduce_Ans_two.text() not in "Enter answer"
-        ):
-            qst = self.Deduce_Qst_two.text()
-            ans = self.Deduce_Ans_two.text()
-            tri_list = [qst, ans]
-            self.join_attribute_dict("Deduce_two", tri_list)
-            self.jion_current_dict("52", tri_list)
-
-    def del_deduce(self):
-        if not self.question_deduce.isChecked():
-            self.del_annotation(q="5")
-            self.del_attribute_dict("Deduce_one")
-            self.del_attribute_dict("Deduce_two")
-
-    # Agricultural area question
-    def ans_agricultural(self):
-        if self.question_agricultural.isChecked():
-            if self.agricultural_ans_road.currentIndex() != 0:
-                tri_list = []
-                qst = "Is there a road in the picture ?"
-                ans = self.agricultural_ans_road.currentText()
-                tri_list.append(qst)
-                tri_list.append(ans)
-                self.jion_current_dict("61", tri_list)
-                self.join_attribute_dict("agricultural_road", ans)
-            else:
-                self.del_annotation(q_id="61")
-                self.del_attribute_dict("agricultural_road")
-
-            if self.agricultural_ans_water.currentIndex() != 0:
-                tri_list = []
-                qst = "Is there water in the picture ?"
-                ans = self.agricultural_ans_water.currentText()
-                tri_list.append(qst)
-                tri_list.append(ans)
-                self.jion_current_dict("62", tri_list)
-                self.join_attribute_dict("water_source", ans)
-            else:
-                self.del_annotation(q_id="62")
-                self.del_attribute_dict("water_source")
-        else:
-            self.del_annotation(q_id="61")
-            self.del_annotation(q_id="62")
-            self.del_attribute_dict("agricultural_road")
-            self.del_attribute_dict("water_source")
-
-    # Industrial area question
-    def ans_industrial(self):
-        if self.question_industrial.isChecked():
-            if self.industrial_ans_facility.currentIndex() != 0:
-                tri_list = []
-                qst = "Is there a facility in the picture ?"
-                ans = self.industrial_ans_facility.currentText()
-                tri_list.append(qst)
-                tri_list.append(ans)
-                self.jion_current_dict("71", tri_list)
-                self.join_attribute_dict("logistics_facility", ans)
-            else:
-                self.del_annotation(q_id="71")
-                self.del_attribute_dict("logistics_facility")
-
-            if self.industrial_ans_scale.currentIndex() != 0:
-                tri_list = []
-                qst = "What is the scale of the facility ?"
-                ans = self.industrial_ans_scale.currentText()
-                tri_list.append(qst)
-                tri_list.append(ans)
-                self.jion_current_dict("72", tri_list)
-                self.join_attribute_dict("construction_scale", ans)
-            else:
-                self.del_annotation(q_id="72")
-                self.del_attribute_dict("construction_scale")
-
-            if self.industrial_ans_location.currentIndex() != 0:
-                tri_list = []
-                qst = "What is the location of the industrial area ?"
-                ans = self.industrial_ans_location.currentText()
-                tri_list.append(qst)
-                tri_list.append(ans)
-                self.jion_current_dict("73", tri_list)
-                self.join_attribute_dict("industrial_location", ans)
-            else:
-                self.del_annotation(q_id="73")
-                self.del_attribute_dict("industrial_location")
-        else:
-            self.del_annotation(q_id="71")
-            self.del_annotation(q_id="72")
-            self.del_annotation(q_id="73")
-            self.del_attribute_dict("logistics_facility")
-            self.del_attribute_dict("construction_scale")
-            self.del_attribute_dict("industrial_location")
-
-    # UAV question
-    def ans_uav(self):
-        if self.question_uav.isChecked():
-            if self.uav_ans_height.currentIndex() != 0:
-                tri_list = []
-                qst = "What is the height of the UAV ?"
-                ans = self.uav_ans_height.currentText()
-                tri_list.append(qst)
-                tri_list.append(ans)
-                self.jion_current_dict("81", tri_list)
-                self.join_attribute_dict("UAV_height", ans)
-            else:
-                self.del_annotation(q_id="81")
-                self.del_attribute_dict("UAV_height")
-
-            if self.uav_ans_angle.currentIndex() != 0:
-                tri_list = []
-                qst = "What is the angle of the UAV ?"
-                ans = self.uav_ans_angle.currentText()
-                tri_list.append(qst)
-                tri_list.append(ans)
-                self.jion_current_dict("82", tri_list)
-                self.join_attribute_dict("UAV_angle", ans)
-            else:
-                self.del_annotation(q_id="82")
-                self.del_attribute_dict("UAV_angle")
-        else:
-            self.del_annotation(q_id="81")
-            self.del_annotation(q_id="82")
-            self.del_attribute_dict("UAV_height")
-            self.del_attribute_dict("UAV_angle")
-
-    def all_Index_Check(self, n=1):
-        if n == 1:
-            return (
-                self.dis_loc_ans_loc_a.currentIndex() != 0
-                and self.dis_loc_ans_object_a.currentIndex() != 0
-                and self.dis_loc_ans_loc_b.currentIndex() != 0
-                and self.dis_loc_ans_object_b.currentIndex() != 0
-                and self.dis_loc_ans_distance.currentIndex() != 0
-                and self.dis_loc_ans_location.currentIndex() != 0
-                and self.dis_loc_is_cluster_b.currentIndex() != 0
-                and self.dis_loc_is_cluster_a.currentIndex() != 0
-            )
-        elif n == 2:
-            return (
-                self.contain_list[0].currentIndex() != 0
-                and self.contain_list[1].currentIndex() != 0
-                and self.contain_list[2].currentIndex() != 0
-                and self.contain_list[3].currentIndex() != 0
-                and self.contain_list[4].currentIndex() != 0
-                and self.contain_list[5].currentIndex() != 0
-                and self.contain_list[6].currentIndex() != 0
-                and self.contain_list[7].currentIndex() != 0
-                and self.contain_list[8].currentIndex() != 0
-            )
-        elif n == 3:
-            return (
-                self.traffic_list[0].currentIndex() != 0
-                and self.traffic_list[1].currentIndex() != 0
-                and self.traffic_list[2].currentIndex() != 0
-                and self.traffic_list[3].currentIndex() != 0
-                and self.traffic_list[4].currentIndex() != 0
-            )
-        elif n == 4:
-            return (
-                self.residential_list[0].currentIndex() != 0
-                and self.residential_list[1].currentIndex() != 0
-                and self.residential_list[2].currentIndex() != 0
-                and self.residential_list[3].currentIndex() != 0
-                and self.residential_list[4].currentIndex() != 0
-            )
-
-    # Record the position information of A and B in the image, if there is only one object, select location as none
-    def join_dis_loc_dict(self):
-        if self.question_dis_loc.isChecked() and self.all_Index_Check():
-            if self.dis_loc_ans_loc_a.currentIndex() == 1:
-                if self.dis_loc_is_cluster_a.currentIndex() == 1:
-                    A = self.dis_loc_ans_object_a.currentText()
-                else:
-                    A = "a cluster of " + self.dis_loc_ans_object_a.currentText()
-            else:
-                if self.dis_loc_is_cluster_a.currentIndex() == 1:
-                    A = (
-                        self.dis_loc_ans_object_a.currentText()
-                        + "s at the %s of the picture"
-                        % self.dis_loc_ans_loc_a.currentText()
-                    )
-                else:
-                    A = (
-                        "a cluster of "
-                        + self.dis_loc_ans_object_a.currentText()
-                        + "s at the %s of the picture"
-                        % self.dis_loc_ans_loc_a.currentText()
-                    )
-
-            if self.dis_loc_ans_loc_b.currentIndex() == 1:
-                if self.dis_loc_is_cluster_b.currentIndex() == 1:
-                    B = self.dis_loc_ans_object_b.currentText()
-                else:
-                    B = "a cluster of " + self.dis_loc_ans_object_b.currentText()
-            else:
-                # A and B have already added location information.
-                if self.dis_loc_is_cluster_b.currentIndex() == 1:
-                    # self.dis_loc_dict:{(A,B):[dis_index,location,distance],(C,D):[dis_index,location,distance],...}
-                    B = (
-                        self.dis_loc_ans_object_b.currentText()
-                        + "s at the %s of the picture"
-                        % self.dis_loc_ans_loc_b.currentText()
-                    )
-                else:
-                    B = (
-                        "a cluster of "
-                        + self.dis_loc_ans_object_b.currentText()
-                        + "s at the %s of the picture"
-                        % self.dis_loc_ans_loc_b.currentText()
-                    )
-
-            self.dis_loc_dict[(A, B)] = [
-                self.dis_loc_ans_distance.currentIndex(),
-                self.dis_loc_ans_location.currentText(),
-                self.dis_loc_ans_distance.currentText(),
+            pair_key = (obj_a_text, obj_b_text)
+            self.dis_loc_details[pair_key] = [
+                self.disloc_distance_box.currentIndex(),
+                self.disloc_relation_box.currentText(),
+                self.disloc_distance_box.currentText()
             ]
-            self.dis_loc_ans_distance.setCurrentIndex(0)
-            self.dis_loc_ans_location.setCurrentIndex(0)
-
-            # Display the distance and relative position of the submitted distance, helping reference
-
-            if len(self.dis_loc_dict) > 0:
-                # self.display_anno.clear()
-                self.display_anno.clear()
-                for k, v in self.dis_loc_dict.items():
-                    self.display_anno.append(
-                        "Dis&&Loc (%s , %s): Loc %s, Dis %s" % (k[0], k[1], v[1], v[2])
-                    )
+            self._show_temporary_complex_annotation_log("LocDis")
+            # Optionally reset D/L comboboxes for next pair entry
+            # self.disloc_pos_a_box.setCurrentIndex(0) ... etc.
         else:
-            self.Warn_Erorr("Some options in Distance/Location are not selected, cannot confirm")
+            self._show_warning("Please select all options for the Distance/Location pair.")
 
-    # Location dictionary
+    def _finalize_disloc_attributes(self):
+        if self.chk_dis_loc.isChecked() and self.dis_loc_details:
+            # Convert dict to list of lists for consistent storage
+            locdis_list_for_storage = []
+            for (obj_a, obj_b), details in self.dis_loc_details.items():
+                locdis_list_for_storage.append([obj_a, obj_b] + details)
+            self._add_or_update_attribute("LocDis", locdis_list_for_storage)
+            # self.dis_loc_details = {} # Clear after finalizing if needed, or keep for modification
+        elif self.chk_dis_loc.isChecked() and not self.dis_loc_details:
+            self._remove_attribute("LocDis") # If checkbox is on but no details, remove old entry
+        self._display_current_attributes_in_log()
 
-    def generate_dis_loc(self):
-        location2location = {
-            "above": "above",
-            "below": "below",
-            "left": "to the left of",
-            "right": "to the right of",
-            "upper left": "in the upper left of",
-            "upper right": "in the upper right of",
-            "bottom left": "at the bottom left of",
-            "bottom right": "at the bottom right of",
-        }
-        ab_location2location = {
-            "above": "below",
-            "below": "above",
-            "left": "to the right of",
-            "right": "to the left of",
-            "upper left": "in the bottom right of",
-            "upper right": "in the bottom left of",
-            "bottom left": "at the upper right of",
-            "bottom right": "at the upper left of",
-        }
-        if self.question_dis_loc.isChecked() and len(self.dis_loc_dict) > 0:
-            # Store all object pairs with distance and location relationships [[A,B,dis_index,location,distance],[C,D,dis_index,location,distance],...]
-            dis_loc_list = []
-            counter = 1
-            for k, v in self.dis_loc_dict.items():
-                dis_loc_list.append([k[0], k[1], v[0], v[1], v[2]])
-            for i in range(len(dis_loc_list)):
-                object_A = dis_loc_list[i][0]
-                object_B = dis_loc_list[i][1]
-                index = dis_loc_list[i][2]
-                location = dis_loc_list[i][3]
-                distance = dis_loc_list[i][4]
 
-                qst_one = "What is the distance between the %s and the %s ?" % (
-                    object_A,
-                    object_B,
-                )
-                ans_one = distance
+    def _handle_contain_state_change(self):
+        if not self.chk_contain.isChecked():
+            self._remove_attribute("PresContain")
+            self.contain_details = {}
+            self._display_current_attributes_in_log()
 
-                qst_two = "What is the position of the %s relative to the %s ?" % (
-                    object_B,
-                    object_A,
-                )
-                ans_two = location
+    def _populate_contain_subset_box(self):
+        landcover = self.contain_landcover_box.currentText()
+        self.contain_subset_box.clear()
+        if landcover in self.LC2SubList:
+            self.contain_subset_box.addItems(self.LC2SubList[landcover])
+        else:
+            self.contain_subset_box.addItems(["Subset Class"]) # Default if no specific subsets
 
-                qst_three = "Is the %s %s the %s ?" % (
-                    object_B,
-                    location2location[location],
-                    object_A,
-                )
-                ans_three = "Yes"
+    def _update_current_landcover_for_delete_contain(self):
+        if self.contain_landcover_box.currentIndex() > 0:
+            self.current_landcover_for_delete = self.contain_landcover_box.currentText()
+        else:
+            self.current_landcover_for_delete = "None"
 
-                qst_four = "Is the %s %s the %s ?" % (
-                    object_A,
-                    location2location[location],
-                    object_B,
-                )
-                ans_four = "No"
+    def _all_contain_options_selected(self):
+        return (self.contain_landcover_box.currentIndex() > 0 and
+                self.contain_subset_box.currentIndex() > 0 and
+                self.contain_number_box.currentIndex() > 0 and
+                self.contain_location_box.currentIndex() > 0 and
+                self.contain_shape_box.currentIndex() > 0 and
+                self.contain_area_box.currentIndex() > 0 and
+                self.contain_length_box.currentIndex() > 0 and
+                self.contain_distribution_box.currentIndex() > 0 and
+                self.contain_quality_box.currentIndex() > 0)
 
-                qst_five = "What is the position of the %s relative to the %s ?" % (
-                    object_A,
-                    object_B,
-                )
-                ans_five = self.ablocation[location]
+    def _confirm_contain_item(self):
+        if self.chk_contain.isChecked() and self._all_contain_options_selected():
+            landcover = self.contain_landcover_box.currentText()
+            item_attributes = []
+            for widget in self.contain_attribute_widgets: # Use the defined list
+                item_attributes.append([widget.currentIndex(), widget.currentText()])
 
-                qst_six = "Is the %s %s the %s ?" % (
-                    object_A,
-                    ab_location2location[location],
-                    object_B,
-                )
-                ans_six = "Yes"
+            if landcover not in self.contain_details:
+                self.contain_details[landcover] = []
 
-                qst_seven = "Is the %s %s the %s ?" % (
-                    object_B,
-                    ab_location2location[location],
-                    object_A,
-                )
-                ans_seven = "No"
+            # Check if this subset already exists for this landcover, if so, update it
+            subset_to_add_or_update = self.contain_subset_box.currentText()
+            found_and_updated = False
+            for i, existing_item_attrs in enumerate(self.contain_details[landcover]):
+                if existing_item_attrs[0][1] == subset_to_add_or_update: # existing_item_attrs[0] is [subset_idx, subset_text]
+                    self.contain_details[landcover][i] = item_attributes
+                    found_and_updated = True
+                    break
+            if not found_and_updated:
+                self.contain_details[landcover].append(item_attributes)
 
-                qst_ans_list = [
-                    [qst_one, ans_one],
-                    [qst_two, ans_two],
-                    [qst_three, ans_three],
-                    [qst_four, ans_four],
-                    [qst_five, ans_five],
-                    [qst_six, ans_six],
-                    [qst_seven, ans_seven],
-                ]
-                for qst in qst_ans_list:
-                    self.jion_current_dict("3" + str(counter), qst)
-                    counter = counter + 1
+            self._show_temporary_complex_annotation_log("PresContain")
+            # Optionally reset C/P comboboxes for next item (except landcover)
+            # for widget in self.contain_attribute_widgets: widget.setCurrentIndex(0)
+        else:
+            self. _show_warning("Please select all options for the Contain/Presence item.")
 
-                while i + 1 < len(dis_loc_list):
-                    object_A_ = dis_loc_list[i + 1][0]
-                    object_B_ = dis_loc_list[i + 1][1]
-                    index_ = dis_loc_list[i + 1][2]
-                    qst_ans_list_ = []
-                    qst_eight = (
-                        "Is the distance between the %s and the %s longer than the distance between the %s and the %s ?"
-                        % (object_A, object_B, object_A_, object_B_)
-                    )
-                    qst_nine = (
-                        "Is the distance between the %s and the %s longer than the distance between the %s and the %s ?"
-                        % (object_A_, object_B_, object_A, object_B)
-                    )
-                    qst_ten = (
-                        "How is the distance between the %s and the %s compared to the distance between the %s and the %s ?"
-                        % (object_A, object_B, object_A_, object_B_)
-                    )
-                    if index > index_:
-                        ans_eight = "Yes"
-                        ans_nine = "No"
-                        ans_ten = "longer"
-                    elif index == index_:
-                        ans_eight = "NO"
-                        ans_nine = "Yes"
-                        ans_ten = "same"
-                    else:
-                        ans_eight = "NO"
-                        ans_nine = "Yes"
-                        ans_ten = "shorter"
-                    qst_ans_list.append([qst_eight, ans_eight])
-                    qst_ans_list.append([qst_nine, ans_nine])
-                    qst_ans_list.append([qst_ten, ans_ten])
-                    for qst_ans in qst_ans_list_:
-                        self.jion_current_dict("3" + str(counter), qst_ans)
-                        counter = counter + 1
-                    i = i + 1
-            self.join_attribute_dict("LocDis", dis_loc_list)
+    def _load_existing_contain_attributes(self):
+        if self.allow_modification and self.chk_contain.isChecked() and \
+           self.contain_landcover_box.currentIndex() > 0 and \
+           self.contain_subset_box.currentIndex() > 0:
 
-    # Establish a category dictionary. When a major category of landcover appears, only the minor categories should be presented in the subset，self.LC2Subset{LC1:[subset1,subset2,...,subsetn],...,LC2:[subset1,subset2,...,subsetn]}
+            landcover = self.contain_landcover_box.currentText()
+            subset_text = self.contain_subset_box.currentText()
 
-    # When selecting landcover, the object automatically appears as a subcategory
-    def get_traffic_object(self):
-        landcover = self.traffic_ans_landcover.currentText()
-        self.traffic_ans_object.clear()
-        self.traffic_ans_object.addItems(self.TR2ObjList[landcover])
+            if landcover in self.contain_details:
+                for item_attrs_list in self.contain_details[landcover]:
+                    # item_attrs_list is like [[idx_subset, text_subset], [idx_num, text_num], ...]
+                    if item_attrs_list[0][1] == subset_text: # Check if subset text matches
+                        self.allow_modification = False # Disable updates while loading
+                        for i, widget in enumerate(self.contain_attribute_widgets):
+                            # item_attrs_list[i] is [index, text] for the current attribute
+                            widget.setCurrentIndex(item_attrs_list[i][0])
+                        self.allow_modification = True # Re-enable
+                        break # Found and loaded
 
-    def get_residential_object(self):
-        landcover = self.residential_ans_landcover.currentText()
-        self.residential_ans_object.clear()
-        self.residential_ans_object.addItems(self.RA2ObjList[landcover])
+    def _delete_single_contain_landcover_attributes(self):
+        if self.chk_contain.isChecked() and self.current_landcover_for_delete != "None":
+            if self.current_landcover_for_delete in self.contain_details:
+                del self.contain_details[self.current_landcover_for_delete]
+                self._show_temporary_complex_annotation_log("PresContain") # Update log
+                # Also update the main attribute dict if it was already finalized
+                if "PresContain" in self.current_image_attributes and \
+                   self.current_landcover_for_delete in self.current_image_attributes["PresContain"]:
+                    del self.current_image_attributes["PresContain"][self.current_landcover_for_delete]
+                    if not self.current_image_attributes["PresContain"]: # If dict becomes empty
+                        del self.current_image_attributes["PresContain"]
+                    self._display_current_attributes_in_log()
 
-    def get_current_traffic_landcover(self):
-        if self.traffic_ans_landcover.currentText() != "LandCover Class":
-            self.current_traffic_landcover = self.traffic_ans_landcover.currentText()
+    def _finalize_contain_attributes(self):
+        if self.chk_contain.isChecked() and self.contain_details:
+            self._add_or_update_attribute("PresContain", dict(self.contain_details)) # Store a copy
+        elif self.chk_contain.isChecked() and not self.contain_details:
+             self._remove_attribute("PresContain")
+        self._display_current_attributes_in_log()
 
-    def get_current_residential_landcover(self):
-        if self.residential_ans_landcover.currentText() != "LandCover Class":
-            self.current_residential_landcover = (
-                self.residential_ans_landcover.currentText()
-            )
 
-    def join_traffic(self):
-        if self.question_traffic.isChecked() and self.all_Index_Check(3):
-            current_traffic_list = []
-            i = 1
-            while i < len(self.traffic_list):
-                current_traffic_list.append(
-                    [
-                        self.traffic_list[i].currentIndex(),
-                        self.traffic_list[i].currentText(),
-                    ]
-                )
-                i = i + 1
-            if self.traffic_list[0].currentText() not in self.traffic_dict:
-                self.traffic_dict[self.traffic_list[0].currentText()] = []
-            if len(self.traffic_dict[self.traffic_list[0].currentText()]) > 0:
-                flag = True
-                for idx, subset in enumerate(
-                    self.traffic_dict[self.traffic_list[0].currentText()]
-                ):
-                    if subset[0][1] == current_traffic_list[0][1]:
-                        self.traffic_dict[self.traffic_list[0].currentText()][
-                            idx
-                        ] = current_traffic_list
-                        flag = False
+    def _handle_deduce_state_change(self):
+        if not self.chk_deduce.isChecked():
+            # Remove potentially added custom attributes
+            if self.deduce_q1_input.property("custom_key"): # Check if a key was set
+                 self._remove_attribute(self.deduce_q1_input.property("custom_key"))
+            if self.deduce_q2_input.property("custom_key"):
+                 self._remove_attribute(self.deduce_q2_input.property("custom_key"))
+            self.deduce_q1_input.setText("Enter custom attribute 1 key")
+            self.deduce_a1_input.setText("Enter attribute 1 value")
+            self.deduce_q2_input.setText("Enter custom attribute 2 key")
+            self.deduce_a2_input.setText("Enter attribute 2 value")
+            self.deduce_q1_input.setProperty("custom_key", None) # Clear stored key
+            self.deduce_q2_input.setProperty("custom_key", None)
+
+    def _update_deduce_attribute_one(self):
+        if self.chk_deduce.isChecked():
+            key = self.deduce_q1_input.text().strip()
+            value = self.deduce_a1_input.text().strip()
+            if key and key != "Enter custom attribute 1 key":
+                self._add_or_update_attribute(key, value if value != "Enter attribute 1 value" else "")
+                self.deduce_q1_input.setProperty("custom_key", key) # Store the key for potential removal
+            else:
+                self._show_warning("Please enter a valid key for custom attribute 1.")
+
+    def _update_deduce_attribute_two(self):
+        if self.chk_deduce.isChecked():
+            key = self.deduce_q2_input.text().strip()
+            value = self.deduce_a2_input.text().strip()
+            if key and key != "Enter custom attribute 2 key":
+                self._add_or_update_attribute(key, value if value != "Enter attribute 2 value" else "")
+                self.deduce_q2_input.setProperty("custom_key", key)
+            else:
+                self._show_warning("Please enter a valid key for custom attribute 2.")
+
+
+    def _handle_traffic_state_change(self):
+        if not self.chk_traffic.isChecked():
+            self._remove_attribute("Traffic")
+            self.traffic_details = {}
+            self._display_current_attributes_in_log()
+
+    def _populate_traffic_object_box(self):
+        landcover = self.traffic_landcover_box.currentText()
+        self.traffic_object_box.clear()
+        if landcover in self.TR2ObjList:
+            self.traffic_object_box.addItems(self.TR2ObjList[landcover])
+        else:
+            self.traffic_object_box.addItems(["Traffic Object"])
+
+    def _update_current_landcover_for_delete_traffic(self):
+        if self.traffic_landcover_box.currentIndex() > 0:
+            self.current_traffic_landcover_for_delete = self.traffic_landcover_box.currentText()
+        else:
+            self.current_traffic_landcover_for_delete = "None"
+
+    def _all_traffic_options_selected(self):
+         return (self.traffic_landcover_box.currentIndex() > 0 and
+                self.traffic_object_box.currentIndex() > 0 and
+                self.traffic_number_box.currentIndex() > 0 and
+                self.traffic_location_box.currentIndex() > 0 and
+                self.traffic_quality_box.currentIndex() > 0)
+
+    def _confirm_traffic_item(self):
+        if self.chk_traffic.isChecked() and self._all_traffic_options_selected():
+            landcover = self.traffic_landcover_box.currentText()
+            item_attributes = []
+            for widget in self.traffic_attribute_widgets:
+                item_attributes.append([widget.currentIndex(), widget.currentText()])
+
+            if landcover not in self.traffic_details:
+                self.traffic_details[landcover] = []
+
+            object_to_add_or_update = self.traffic_object_box.currentText()
+            found_and_updated = False
+            for i, existing_item_attrs in enumerate(self.traffic_details[landcover]):
+                if existing_item_attrs[0][1] == object_to_add_or_update:
+                    self.traffic_details[landcover][i] = item_attributes
+                    found_and_updated = True
+                    break
+            if not found_and_updated:
+                self.traffic_details[landcover].append(item_attributes)
+            self._show_temporary_complex_annotation_log("Traffic")
+        else:
+            self._show_warning("Please select all options for the Traffic item.")
+
+    def _load_existing_traffic_attributes(self):
+        if self.allow_modification and self.chk_traffic.isChecked() and \
+           self.traffic_landcover_box.currentIndex() > 0 and \
+           self.traffic_object_box.currentIndex() > 0:
+            landcover = self.traffic_landcover_box.currentText()
+            object_text = self.traffic_object_box.currentText()
+            if landcover in self.traffic_details:
+                for item_attrs_list in self.traffic_details[landcover]:
+                    if item_attrs_list[0][1] == object_text:
+                        self.allow_modification = False
+                        for i, widget in enumerate(self.traffic_attribute_widgets):
+                            widget.setCurrentIndex(item_attrs_list[i][0])
+                        self.allow_modification = True
                         break
-                if flag:
-                    self.traffic_dict[self.traffic_list[0].currentText()].append(
-                        current_traffic_list
-                    )
-            else:
-                self.traffic_dict[self.traffic_list[0].currentText()].append(
-                    current_traffic_list
-                )
-            if len(self.traffic_dict) > 0:
-                self.display_anno.clear()
-                for k, v in self.traffic_dict.items():
-                    if len(v) > 0:
-                        for s in v:
-                            # Display traffic annotation, Num, Loc, Better
-                            self.display_anno.append(
-                                "Traffic (%s:%s): Num %s, Loc %s, Better %s"
-                                % (k, s[0][1], s[1][1], s[2][1], s[3][1])
-                            )
-                            # self.display_anno.append('Traffic (%s:%s): Num %s, Loc %s, Shape %s, Area %s, Len %s, Distri %s, Better %s' % (k, s[0][1], s[1][1], s[2][1], s[3][1], s[4][1], s[5][1], s[6][1], s[7][1]))
-            for e in self.traffic_list:
-                e.setCurrentIndex(0)
-        else:
-            self.Warn_Erorr("Some checkboxes are not selected, cannot confirm")
 
-    def join_residential(self):
-        if self.question_residential.isChecked() and self.all_Index_Check(4):
-            current_residential_list = []
-            i = 1
-            while i < len(self.residential_list):
-                current_residential_list.append(
-                    [
-                        self.residential_list[i].currentIndex(),
-                        self.residential_list[i].currentText(),
-                    ]
-                )
-                i = i + 1
-            if self.residential_list[0].currentText() not in self.residential_dict:
-                self.residential_dict[self.residential_list[0].currentText()] = []
-            if len(self.residential_dict[self.residential_list[0].currentText()]) > 0:
-                flag = True
-                for idx, subset in enumerate(
-                    self.residential_dict[self.residential_list[0].currentText()]
-                ):
-                    if subset[0][1] == current_residential_list[0][1]:
-                        self.residential_dict[self.residential_list[0].currentText()][
-                            idx
-                        ] = current_residential_list
-                        flag = False
+    def _delete_single_traffic_landcover_attributes(self):
+        if self.chk_traffic.isChecked() and self.current_traffic_landcover_for_delete != "None":
+            if self.current_traffic_landcover_for_delete in self.traffic_details:
+                del self.traffic_details[self.current_traffic_landcover_for_delete]
+                self._show_temporary_complex_annotation_log("Traffic")
+                if "Traffic" in self.current_image_attributes and \
+                   self.current_traffic_landcover_for_delete in self.current_image_attributes["Traffic"]:
+                    del self.current_image_attributes["Traffic"][self.current_traffic_landcover_for_delete]
+                    if not self.current_image_attributes["Traffic"]:
+                        del self.current_image_attributes["Traffic"]
+                    self._display_current_attributes_in_log()
+
+    def _finalize_traffic_attributes(self):
+        if self.chk_traffic.isChecked() and self.traffic_details:
+            self._add_or_update_attribute("Traffic", dict(self.traffic_details))
+        elif self.chk_traffic.isChecked() and not self.traffic_details:
+            self._remove_attribute("Traffic")
+        self._display_current_attributes_in_log()
+
+
+    def _handle_residential_state_change(self):
+        if not self.chk_residential.isChecked():
+            self._remove_attribute("Residential")
+            self.residential_details = {}
+            self._display_current_attributes_in_log()
+
+    def _populate_residential_object_box(self):
+        landcover = self.residential_landcover_box.currentText()
+        self.residential_object_box.clear()
+        if landcover in self.RA2ObjList:
+            self.residential_object_box.addItems(self.RA2ObjList[landcover])
+        else:
+            self.residential_object_box.addItems(["Residential Object"])
+
+    def _update_current_landcover_for_delete_residential(self):
+        if self.residential_landcover_box.currentIndex() > 0:
+            self.current_residential_landcover_for_delete = self.residential_landcover_box.currentText()
+        else:
+            self.current_residential_landcover_for_delete = "None"
+
+    def _all_residential_options_selected(self):
+        return (self.residential_landcover_box.currentIndex() > 0 and
+                self.residential_object_box.currentIndex() > 0 and
+                self.residential_number_box.currentIndex() > 0 and
+                self.residential_location_box.currentIndex() > 0 and
+                self.residential_quality_box.currentIndex() > 0)
+
+    def _confirm_residential_item(self):
+        if self.chk_residential.isChecked() and self._all_residential_options_selected():
+            landcover = self.residential_landcover_box.currentText()
+            item_attributes = []
+            for widget in self.residential_attribute_widgets:
+                item_attributes.append([widget.currentIndex(), widget.currentText()])
+
+            if landcover not in self.residential_details:
+                self.residential_details[landcover] = []
+
+            object_to_add_or_update = self.residential_object_box.currentText()
+            found_and_updated = False
+            for i, existing_item_attrs in enumerate(self.residential_details[landcover]):
+                if existing_item_attrs[0][1] == object_to_add_or_update:
+                    self.residential_details[landcover][i] = item_attributes
+                    found_and_updated = True
+                    break
+            if not found_and_updated:
+                self.residential_details[landcover].append(item_attributes)
+            self._show_temporary_complex_annotation_log("Residential")
+        else:
+            self._show_warning("Please select all options for the Residential item.")
+
+
+    def _load_existing_residential_attributes(self):
+        if self.allow_modification and self.chk_residential.isChecked() and \
+           self.residential_landcover_box.currentIndex() > 0 and \
+           self.residential_object_box.currentIndex() > 0:
+            landcover = self.residential_landcover_box.currentText()
+            object_text = self.residential_object_box.currentText()
+            if landcover in self.residential_details:
+                for item_attrs_list in self.residential_details[landcover]:
+                    if item_attrs_list[0][1] == object_text:
+                        self.allow_modification = False
+                        for i, widget in enumerate(self.residential_attribute_widgets):
+                            widget.setCurrentIndex(item_attrs_list[i][0])
+                        self.allow_modification = True
                         break
-                if flag:
-                    self.residential_dict[
-                        self.residential_list[0].currentText()
-                    ].append(current_residential_list)
+
+    def _delete_single_residential_landcover_attributes(self):
+        if self.chk_residential.isChecked() and self.current_residential_landcover_for_delete != "None":
+            if self.current_residential_landcover_for_delete in self.residential_details:
+                del self.residential_details[self.current_residential_landcover_for_delete]
+                self._show_temporary_complex_annotation_log("Residential")
+                if "Residential" in self.current_image_attributes and \
+                   self.current_residential_landcover_for_delete in self.current_image_attributes["Residential"]:
+                    del self.current_image_attributes["Residential"][self.current_residential_landcover_for_delete]
+                    if not self.current_image_attributes["Residential"]:
+                        del self.current_image_attributes["Residential"]
+                    self._display_current_attributes_in_log()
+
+    def _finalize_residential_attributes(self):
+        if self.chk_residential.isChecked() and self.residential_details:
+            self._add_or_update_attribute("Residential", dict(self.residential_details))
+        elif self.chk_residential.isChecked() and not self.residential_details:
+            self._remove_attribute("Residential")
+        self._display_current_attributes_in_log()
+
+
+    def _update_agricultural_attributes(self):
+        if self.chk_agricultural.isChecked():
+            if self.agri_road_box.currentIndex() > 0: # 0 is placeholder "Agricultural Road?"
+                self._add_or_update_attribute("agricultural_road", self.agri_road_box.currentText())
             else:
-                self.residential_dict[self.residential_list[0].currentText()].append(
-                    current_residential_list
-                )
-            if len(self.residential_dict) > 0:
-                self.display_anno.clear()
-                for k, v in self.residential_dict.items():
-                    if len(v) > 0:
-                        for s in v:
-                            self.display_anno.append(
-                                "Residential (%s:%s): Num %s, Loc %s, Better %s"
-                                % (k, s[0][1], s[1][1], s[2][1], s[3][1])
-                            )
-            for e in self.residential_list:
-                e.setCurrentIndex(0)
+                self._remove_attribute("agricultural_road")
+            if self.agri_water_box.currentIndex() > 0: # 0 is placeholder "Agricultural Water?"
+                self._add_or_update_attribute("agricultural_water", self.agri_water_box.currentText())
+            else:
+                self._remove_attribute("agricultural_water")
         else:
-            self.Warn_Erorr("Some checkboxes are not selected, cannot confirm")
+            self._remove_attribute("agricultural_road")
+            self._remove_attribute("agricultural_water")
 
-    # When selecting landcover, the subset automatically appears as a subcategory
-
-    def get_subset(self):
-        landcover = self.contain_ans_landcover.currentText()
-        self.contain_ans_subset.clear()
-        self.contain_ans_subset.addItems(self.LC2SubList[landcover])
-
-    def get_current_landcover(self):
-        if self.contain_ans_landcover.currentText() != "LandCover Class":
-            self.current_landcover = self.contain_ans_landcover.currentText()
-
-    def join_contain(self):
-        if self.question_contain.isChecked() and self.all_Index_Check(2):
-            # Store the information to be submitted for contain/presence, [[index,text],[],...], a two-dimensional array, excluding the type of landcover
-            current_contain_list = []
-            i = 1
-            while i < len(
-                self.contain_list
-            ):  # self.contain_list contains the 9 components of contain/presence
-                current_contain_list.append(
-                    [
-                        self.contain_list[i].currentIndex(),
-                        self.contain_list[i].currentText(),
-                    ]
-                )
-                i = i + 1
-            # self.contain_dict stores each landcover corresponding to several 8 components {landcover1:[[1,2,3,...,8],[1,2,3,...,8]],landcover2:[[1,2,3,...,8],[1,2,3,...,8]],...}
-            if self.contain_list[0].currentText() not in self.contain_dict:
-                self.contain_dict[self.contain_list[0].currentText()] = []
-            if len(self.contain_dict[self.contain_list[0].currentText()]) > 0:
-                flag = True
-                for idx, subset in enumerate(
-                    self.contain_dict[self.contain_list[0].currentText()]
-                ):
-                    if subset[0][1] == current_contain_list[0][1]:
-                        self.contain_dict[self.contain_list[0].currentText()][
-                            idx
-                        ] = current_contain_list
-                        flag = False
-                        break
-                if flag:
-                    self.contain_dict[self.contain_list[0].currentText()].append(
-                        current_contain_list
-                    )
+    def _update_industrial_attributes(self):
+        if self.chk_industrial.isChecked():
+            if self.ind_facility_box.currentIndex() > 0:
+                self._add_or_update_attribute("industrial_facility", self.ind_facility_box.currentText())
             else:
-                self.contain_dict[self.contain_list[0].currentText()].append(
-                    current_contain_list
-                )
-
-            # Display the attribute information of the submitted objects
-            if len(self.contain_dict) > 0:
-                self.display_anno.clear()
-                for k, v in self.contain_dict.items():
-                    if len(v) > 0:
-                        for s in v:
-                            self.display_anno.append(
-                                "Con&&Pre (%s:%s): Num %s, Loc %s, Shape %s, Area %s, Len %s, Distri %s, Better %s"
-                                % (
-                                    k,
-                                    s[0][1],
-                                    s[1][1],
-                                    s[2][1],
-                                    s[3][1],
-                                    s[4][1],
-                                    s[5][1],
-                                    s[6][1],
-                                    s[7][1],
-                                )
-                            )
-
-            for e in self.contain_list:
-                e.setCurrentIndex(0)
+                self._remove_attribute("industrial_facility")
+            if self.ind_scale_box.currentIndex() > 0:
+                self._add_or_update_attribute("industrial_scale", self.ind_scale_box.currentText())
+            else:
+                self._remove_attribute("industrial_scale")
+            if self.ind_location_box.currentIndex() > 0:
+                self._add_or_update_attribute("industrial_location", self.ind_location_box.currentText())
+            else:
+                self._remove_attribute("industrial_location")
         else:
-            self.Warn_Erorr("Some checkboxes are not selected, cannot confirm")
+            self._remove_attribute("industrial_facility")
+            self._remove_attribute("industrial_scale")
+            self._remove_attribute("industrial_location")
 
-    # If landcover and subset have been previously annotated, and the landcover and subset are selected again, the remaining properties will be automatically filled
-
-    def show_pre_contain_attribution(self):
-        if self.flag:
-            if (
-                self.contain_ans_landcover.currentText() != "LandCover Class"
-                and self.contain_ans_subset.currentText() != "Subset Class"
-            ):
-                landcover = self.contain_ans_landcover.currentText()
-                subset = self.contain_ans_subset.currentText()
-                subset_attribution_list = [
-                    self.contain_ans_number,
-                    self.contain_ans_location,
-                    self.contain_ans_shape,
-                    self.contain_ans_Area,
-                    self.contain_ans_length,
-                    self.contain_ans_distribution,
-                    self.contain_ans_better,
-                ]
-
-                if landcover in self.contain_dict:
-                    landcover_attribution = self.contain_dict[landcover]
-                    for sub_attribution in landcover_attribution:
-                        if sub_attribution[0][1] == subset:
-                            for idx, attributions in enumerate(sub_attribution[1:]):
-                                subset_attribution_list[idx].setCurrentIndex(
-                                    attributions[0]
-                                )
-
-    # If landcover and object have been previously annotated, and the landcover and object are selected again, the remaining properties will be automatically filled
-    def show_pre_traffic_attribution(self):
-        if self.flag:
-            if (
-                self.traffic_ans_landcover.currentText() != "LandCover Class"
-                and self.traffic_ans_object.currentText() != "Object Class"
-            ):
-                landcover = self.traffic_ans_landcover.currentText()
-                object = self.traffic_ans_object.currentText()
-                object_attribution_list = [
-                    self.traffic_ans_number,
-                    self.traffic_ans_location,
-                    self.traffic_ans_better,
-                ]
-
-                if landcover in self.traffic_dict:
-                    landcover_attribution = self.traffic_dict[landcover]
-                    for sub_attribution in landcover_attribution:
-                        if sub_attribution[0][1] == object:
-                            for idx, attributions in enumerate(sub_attribution[1:]):
-                                object_attribution_list[idx].setCurrentIndex(
-                                    attributions[0]
-                                )
-
-    def show_pre_residential_attribution(self):
-        if self.flag:
-            if (
-                self.residential_ans_landcover.currentText() != "LandCover Class"
-                and self.residential_ans_object.currentText() != "Object Class"
-            ):
-                landcover = self.residential_ans_landcover.currentText()
-                object = self.residential_ans_object.currentText()
-                object_attribution_list = [
-                    self.residential_ans_number,
-                    self.residential_ans_location,
-                    self.residential_ans_better,
-                ]
-
-                if landcover in self.residential_dict:
-                    landcover_attribution = self.residential_dict[landcover]
-                    for sub_attribution in landcover_attribution:
-                        if sub_attribution[0][1] == object:
-                            for idx, attributions in enumerate(sub_attribution[1:]):
-                                object_attribution_list[idx].setCurrentIndex(
-                                    attributions[0]
-                                )
-
-    def del_contain(self):
-        if not self.question_contain.isChecked():
-            self.del_annotation(q="4")
-            self.del_attribute_dict("PresContain")
-
-    def del_traffic(self):
-        if not self.question_traffic.isChecked():
-            self.del_annotation(q="6")
-            self.del_attribute_dict("Traffic")
-
-    def del_residential(self):
-        if not self.question_residential.isChecked():
-            self.del_annotation(q="7")
-            self.del_attribute_dict("Residential")
-
-    def generate_contain(self):
-        qst_list = []  # Used to store all the question pairs
-        counter = 1  # Used to number the questions
-        # self.contain_dict stores each landcover corresponding to several 8 components {landcover1:[[1,2,3,...,8],[1,2,3,...,9]],landcover2:}
-        if self.question_contain.isChecked() and len(self.contain_dict) > 0:
-            land_cover_list = []  # [landcover1,landcover2,...]
-            # {landcover1:[subset1,subset2,...],landcover2:[subset1,...]}
-            landcover_dict = {}
-            # {landcover1:[number(index之和),area(index之和),kinds],landcover2:[number,area,kinds],...}
-            landcover_atri_dict = {}
-            # {subset1:[[index,text],[index,text],...],subset2:[[index,text],[index,text],...],...}
-            subset_dict = {}
-            subset_list = []  # [subset1,subset2,...]
-            for k, v in self.contain_dict.items():
-                land_cover_list.append(k)
-                temp = []  # Temporary storage
-
-                for subset in v:
-                    temp.append(subset[0][1])
-                    subset_dict[subset[0][1]] = subset[1:]
-                    subset_list.append(subset[0][1])
-                landcover_dict[k] = temp
-
-            # Establish an attribute dictionary for landcover, including the quantity, area, and type of each landcover category
-            # Collect the quantity, area, and number of types of landcover levels landcover_atri_dict:{landcover1:[num,area,kinds],landcover2:[num,area,kinds],...}
-            for nu in range(len(land_cover_list)):
-                landcover = land_cover_list[nu]
-                num_s = 0
-                area_s = 0
-
-                if len(landcover_dict[landcover]) > 0:
-                    for n_ in range(len(landcover_dict[landcover])):
-                        sub = landcover_dict[landcover][n_]
-                        num_s = num_s + subset_dict[sub][0][0]
-                        area_s = area_s + subset_dict[sub][4][0]
-                    landcover_atri_dict[landcover] = [
-                        num_s,
-                        area_s,
-                        len(landcover_dict[landcover]),
-                    ]
-
-            # For the landcover Q&A section, ask questions about the overall situation of landcover
-            qst_1 = "How many land cover classes are totally in this picture ?"
-            ans_1 = len(land_cover_list)
-            qst_list.append([qst_1, ans_1])
-
-            # Sort landcover by quantity and area
-            # sort_land_cover_num=sorted(landcover_atri_dict,key=lambda k:landcover_atri_dict[k][0],reverse=True)  # 数量从大到小的landcover list
-
-            sort_land_cover_area = sorted(
-                landcover_atri_dict,
-                key=lambda k: landcover_atri_dict[k][1],
-                reverse=True,
-            )  # Area from largest to smallest landcover list
-
-            # Keep only one landcover in the landcover list, and ask which landcover is the largest
-
-            # Area and quantity sorting, then ask (maximum and minimum)
-            if len(sort_land_cover_area) > 1:
-                if (
-                    landcover_atri_dict[sort_land_cover_area[0]]
-                    != landcover_atri_dict[sort_land_cover_area[1]]
-                ):
-                    qst_2 = "Which land cover classes is the largest in this picture ?"
-                    ans_2 = sort_land_cover_area[0]
-                    qst_list.append([qst_2, ans_2])
-                elif (
-                    len(sort_land_cover_area) == 2
-                    or landcover_atri_dict[sort_land_cover_area[1]]
-                    != landcover_atri_dict[sort_land_cover_area[2]]
-                ):
-                    qst_2 = (
-                        "In addition to the %ss, Which land cover classes is the largest in this picture ?"
-                        % (sort_land_cover_area[0])
-                    )
-                    ans_2 = sort_land_cover_area[1]
-                    qst_ = (
-                        "In addition to the %ss, Which land cover classes is the largest in this picture ?"
-                        % (sort_land_cover_area[1])
-                    )
-                    ans_ = sort_land_cover_area[0]
-                    qst_list.append([qst_2, ans_2])
-                    qst_list.append([qst_, ans_])
-
-                if (
-                    landcover_atri_dict[sort_land_cover_area[-1]]
-                    != landcover_atri_dict[sort_land_cover_area[-2]]
-                ):
-                    qst_2 = "Which land cover classes is the smallest in this picture ?"
-                    ans_2 = sort_land_cover_area[-1]
-                    qst_list.append([qst_2, ans_2])
-                elif (
-                    len(sort_land_cover_area) > 2
-                    and landcover_atri_dict[sort_land_cover_area[-2]]
-                    != landcover_atri_dict[sort_land_cover_area[-3]]
-                ):
-                    qst_2 = (
-                        "In addition to the %ss, Which land cover classes is the smallest in this picture ?"
-                        % (sort_land_cover_area[-1])
-                    )
-                    ans_2 = sort_land_cover_area[-2]
-                    qst_ = (
-                        "In addition to the %ss, Which land cover classes is the largetst in this picture ?"
-                        % (sort_land_cover_area[-2])
-                    )
-                    ans_ = sort_land_cover_area[-1]
-                    qst_list.append([qst_2, ans_2])
-                    qst_list.append([qst_, ans_])
-
-            # Make the number of answers 1 landcover
-            if len(land_cover_list) == 1:
-                qst_2 = "What land cover classes are in this picture ?"
-                ans_2 = land_cover_list[0]
-                qst_list.append([qst_2, ans_2])
-
-            elif len(land_cover_list) == 2:
-                for n in range(len(land_cover_list)):
-                    qst_3 = (
-                        "In addition to the %ss, Which cover classes is in this picture ?"
-                        % (land_cover_list[n])
-                    )
-                    ans_3 = land_cover_list[(n + 1) % 2]
-                    qst_list.append([qst_3, ans_3])
-            elif len(land_cover_list) == 3:
-                for n in range(len(land_cover_list)):
-                    qst_3 = (
-                        "In addition to the %ss, Which cover classes in this picture ?"
-                        % (
-                            " and ".join(
-                                [
-                                    land
-                                    for land in land_cover_list
-                                    if land != land_cover_list[n]
-                                ]
-                            )
-                        )
-                    )
-                    ans_3 = land_cover_list[n]
-                    qst_list.append([qst_3, ans_3])
+    def _update_uav_attributes(self):
+        if self.chk_uav.isChecked():
+            if self.uav_height_box.currentIndex() > 0:
+                self._add_or_update_attribute("uav_height", self.uav_height_box.currentText())
             else:
-                for n in range(len(land_cover_list)):
-                    temp_ = [
-                        land for land in land_cover_list if land != land_cover_list[n]
-                    ]  # Exclude the answer landcover后的 landcoverlist
-                    qst_3 = (
-                        "In addition to the %ss, Which cover classes is in this picture ?"
-                        % (", ".join(temp_[:-1]) + " and %s" % temp_[-1])
-                    )
-                    ans_3 = land_cover_list[n]
-                    qst_list.append([qst_3, ans_3])
-
-            non_land_cover_list = [
-                land for land in self.landcover_list if land not in land_cover_list
-            ]  # The landcover type that did not appear
-            random.shuffle(non_land_cover_list)
-            if len(land_cover_list) <= len(non_land_cover_list):
-                num = len(land_cover_list)
+                self._remove_attribute("uav_height")
+            if self.uav_angle_box.currentIndex() > 0:
+                self._add_or_update_attribute("uav_angle", self.uav_angle_box.currentText())
             else:
-                num = len(non_land_cover_list)
-            for i in range(num):
-                qst_list.append(
-                    [
-                        "Is there some a %s present in this picture ?"
-                        % land_cover_list[i],
-                        "Yes",
-                    ]
-                )
-                qst_list.append(
-                    [
-                        "Is there some a %s present in this picture ?"
-                        % non_land_cover_list[i],
-                        "No",
-                    ]
-                )
+                self._remove_attribute("uav_angle")
+        else:
+            self._remove_attribute("uav_height")
+            self._remove_attribute("uav_angle")
 
-            # Traverse the landcovers that appear and ask questions for each landcover
-            for n in range(len(land_cover_list)):
-                landcover = land_cover_list[n]
-                qst_list.append(
-                    [
-                        "How many %s classes are in this picture ?" % landcover,
-                        "%d" % len(landcover_dict[landcover]),
-                    ]
-                )
-                # For the subset Q&A section, ask questions about the types of subsets  
-                if len(landcover_dict[landcover]) == 1:
-                    qst_list.append(
-                        [
-                            "What %s classes are in this picture ?" % landcover,
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                elif len(landcover_dict[landcover]) == 2:
-                    qst_list.append(
-                        [
-                            "In addition to the %ss, which %s classes does this picture contain ?"
-                            % (landcover_dict[landcover][0], landcover),
-                            landcover_dict[landcover][1],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss, which %s classes does this picture contain ?"
-                            % (landcover_dict[landcover][1], landcover),
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                elif len(landcover_dict[landcover]) == 3:
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][0],
-                                landcover_dict[landcover][1],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][2],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][0],
-                                landcover_dict[landcover][2],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][1],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][1],
-                                landcover_dict[landcover][2],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                else:
-                    pass  # For the comparison part of landcover, ask questions in the same way as the overall landcover inquiry, asking questions in the form of "except what", and reducing the number of answers to 1
-                # For the comparison part of landcover
-                m = n + 1
-                while m < len(land_cover_list):
-                    landcover_ = land_cover_list[m]
-                    # Compare quantity
-                    if (
-                        landcover_atri_dict[landcover][0]
-                        > landcover_atri_dict[landcover_][0]
-                    ):
-                        ans = "More"
-                        ans_a = "Less"
-                        ans_ = "Yes"
-                        ans__ = "No"
-                    elif (
-                        landcover_atri_dict[landcover][0]
-                        == landcover_atri_dict[landcover_][0]
-                    ):
-                        ans = "Almost Same"
-                        ans_a = "Almost Same"
-                        ans_ = "No"
-                        ans__ = "No"
-                    else:
-                        ans = "Less"
-                        ans_a = "More"
-                        ans_ = "No"
-                        ans__ = "Yes"
-                    qst_list.append(
-                        [
-                            "How is the number of the %ss in this picture compared to the %ss ?"
-                            % (landcover, landcover_),
-                            ans,
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "How is the number of the %ss in this picture compared to the %ss ?"
-                            % (landcover_, landcover),
-                            ans_a,
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "Are there more %ss than %ss in this picture ?"
-                            % (landcover, landcover_),
-                            ans_,
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "Are there more %ss than %ss in this picture ?"
-                            % (landcover_, landcover),
-                            ans__,
-                        ]
-                    )
 
-                    # Compare area
-                    if (
-                        landcover_atri_dict[landcover][1]
-                        > landcover_atri_dict[landcover_][1]
-                    ):
-                        ans = "Larger"
-                        ans_a = "Smaller"
-                        ans_ = "Yes"
-                        ans__ = "No"
-                    elif (
-                        landcover_atri_dict[landcover][1]
-                        == landcover_atri_dict[landcover_][1]
-                    ):
-                        ans = "Almost Same"
-                        ans_a = "Almost Same"
-                        ans_ = "No"
-                        ans__ = "No"
-                    else:
-                        ans = "Smaller"
-                        ans_a = "Larger"
-                        ans_ = "No"
-                        ans__ = "Yes"
-                    qst_list.append(
-                        [
-                            "How is the area of the %ss in this picture compared to the %ss ?"
-                            % (landcover, landcover_),
-                            ans,
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "How is the area of the %ss in this picture compared to the %ss ?"
-                            % (landcover_, landcover),
-                            ans_a,
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "Is the area of the %ss in this picture greater than the area of the %ss ?"
-                            % (landcover, landcover_),
-                            ans_,
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "Is the area of the %ss in this picture greater than the area of the %ss ?"
-                            % (landcover_, landcover),
-                            ans__,
-                        ]
-                    )
-                    # Compare the number of types
-                    if (
-                        landcover_atri_dict[landcover][2]
-                        > landcover_atri_dict[landcover_][2]
-                    ):
-                        ans_ = "Yes"
-                        ans__ = "No"
-                    else:
-                        ans_ = "No"
-                        ans__ = "Yes"
-                    qst_list.append(
-                        [
-                            "Is there more categories of %ss in this picture than %ss ?"
-                            % (landcover, landcover_),
-                            ans_,
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "Is there more categories of %ss in this picture than %ss ?"
-                            % (landcover_, landcover),
-                            ans__,
-                        ]
-                    )
+    def _show_temporary_complex_annotation_log(self, category_key):
+        """Shows log for complex types like LocDis, PresContain, Traffic, Residential from their temporary dicts."""
+        self.display_anno_log.clear()
+        temp_dict_to_show = {}
+        if category_key == "LocDis":    temp_dict_to_show = self.dis_loc_details
+        elif category_key == "PresContain": temp_dict_to_show = self.contain_details
+        elif category_key == "Traffic":     temp_dict_to_show = self.traffic_details
+        elif category_key == "Residential": temp_dict_to_show = self.residential_details
 
-                    m = m + 1
+        if not temp_dict_to_show:
+            self.display_anno_log.setText(f"No '{category_key}' items confirmed yet for this image.")
+            return
 
-            # The presence of subset
-            non_subset_list = [
-                subset
-                for subset in self.subset_list
-                if subset not in landcover_dict[landcover]
-            ] + [
-                "orchard",
-                "military area",
-                "airport",
-                "vineyard",
-                "volcano",
-            ]  # The subset list that did not appear
-            random.shuffle(non_subset_list)
-            if len(subset_list) <= len(non_subset_list):
-                num = len(subset_list)
-            else:
-                num = len(non_subset_list)
-            for i in range(num):
-                qst_list.append(
-                    ["Are there some %ss present ?" % subset_list[n], "Yes"]
-                )
-                qst_list.append(
-                    ["Are there some %ss present ?" % non_subset_list[n], "No"]
-                )
-                qst_list.append(
-                    ["How many %ss are in this picture ?" % non_subset_list[n], "0"]
-                )
+        log_text = f"Confirmed '{category_key}' items for current image:\n"
+        if category_key == "LocDis":
+            for (obj_a, obj_b), details in temp_dict_to_show.items():
+                log_text += f"  - Pair: ({obj_a}) & ({obj_b}), Loc: {details[1]}, Dist: {details[2]}\n"
+        else: # PresContain, Traffic, Residential (similar structure)
+            for landcover, items_list in temp_dict_to_show.items():
+                log_text += f"  {landcover}:\n"
+                for item_attrs in items_list: # item_attrs is a list of [index, text]
+                    attr_strings = [f"{self._get_attr_name_for_log(category_key, idx, item_attrs[0])}: {item_attrs[1]}" for idx, item_attrs in enumerate(item_attrs)]
+                    log_text += f"    - {', '.join(attr_strings)}\n"
+        self.display_anno_log.setText(log_text)
 
-            # Other questions针对subset
 
-            for n in range(len(subset_list)):
-                subset = subset_list[n]
-                # number question
-                # If the quantity attribute exists, farmland and thickets take a separate number
-                if subset_dict[subset][0][1] != "none":
-                    if subset == "farmlands" or subset == "thickets":
-                        qst_list.append(
-                            [
-                                "How many separated %ss are in this picture ?" % subset,
-                                subset_dict[subset][0][1],
-                            ]
-                        )
-                    else:
-                        qst_list.append(
-                            [
-                                "How many %ss are in this picture ?" % subset,
-                                subset_dict[subset][0][1],
-                            ]
-                        )
+    # --- Image Measurement Triggers ---
+    def trigger_distance_measurement(self):
+        if self.img_paths_rgb and self.current_image_index < len(self.img_paths_rgb):
+            current_image_path = self.img_paths_rgb[self.current_image_index]
+            measurement_tool = ImageMeasurement(current_image_path)
+            measurement_tool.measure_distance()
+        else:
+            self._show_warning("Please select an RGB image folder and an image first.")
 
-                # location question
-                if subset_dict[subset][1][1] != "none":
-                    qst_list.append(
-                        [
-                            "Where is the most part of %ss ?" % subset,
-                            subset_dict[subset][1][1],
-                        ]
-                    )
-                # shape question
-                if subset_dict[subset][2][1] != "none":
-                    qst_list.append(
-                        [
-                            "What is the shape of the largest %ss ?" % subset,
-                            subset_dict[subset][2][1],
-                        ]
-                    )
-                # Area question
-                if subset_dict[subset][3][1] != "none":
-                    qst_list.append(
-                        [
-                            "What is the area covered by %ss ?" % subset,
-                            subset_dict[subset][3][1],
-                        ]
-                    )
-                # length question
-                if subset_dict[subset][4][1] != "none":
-                    qst_list.append(
-                        [
-                            "What is the length of the longest %ss ?" % subset,
-                            subset_dict[subset][4][1],
-                        ]
-                    )
-                # Distribution question
-                if subset_dict[subset][5][1] != "none":
-                    qst_list.append(
-                        [
-                            "How are the most part of the %ss distributed ?" % subset,
-                            subset_dict[subset][5][1],
-                        ]
-                    )
-                # Better question
-                if subset_dict[subset][6][1] != "none":
-                    qst_list.append(
-                        [
-                            "Which picture has %ss in it is better ?" % subset,
-                            subset_dict[subset][6][1],
-                        ]
-                    )
+    def trigger_area_measurement(self):
+        if self.img_paths_rgb and self.current_image_index < len(self.img_paths_rgb):
+            current_image_path = self.img_paths_rgb[self.current_image_index]
+            measurement_tool = ImageMeasurement(current_image_path)
+            measurement_tool.measure_area()
+        else:
+            self._show_warning("Please select an RGB image folder and an image first.")
 
-                # Comparison question, compare subsets.
-                m = n + 1
-                while m < len(subset_list):
-                    subset_ = subset_list[m]
-                    # Compare quantity
-                    if (
-                        subset_dict[subset][0][1] != "none"
-                        and subset_dict[subset_][0][1] != "none"
-                    ):
-                        if subset_dict[subset][0][0] > subset_dict[subset_][0][0]:
-                            ans = "More"
-                            ans_a = "Less"
-                            ans_ = "Yes"
-                            ans__ = "No"
-                        elif subset_dict[subset][0][0] == subset_dict[subset_][0][0]:
-                            ans = "Almost Same"
-                            ans_a = "Almost Same"
-                            ans_ = "No"
-                            ans__ = "No"
-                        else:
-                            ans = "Less"
-                            ans_a = "More"
-                            ans_ = "No"
-                            ans__ = "Yes"
-                        qst_list.append(
-                            [
-                                "How about the number of %ss in this picture compared to %ss ?"
-                                % (subset, subset_),
-                                ans,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "How about the number of %ss in this picture compared to %ss ?"
-                                % (subset_, subset),
-                                ans_a,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "Are there more %ss than %ss in this picture ?"
-                                % (subset, subset_),
-                                ans_,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "Are there more %ss than %ss in this picture ?"
-                                % (subset_, subset),
-                                ans__,
-                            ]
-                        )
-                    # Compare area
-                    if (
-                        subset_dict[subset][3][1] != "none"
-                        and subset_dict[subset_][3][1] != "none"
-                    ):
-                        if subset_dict[subset][3][0] > subset_dict[subset_][3][0]:
-                            ans = "Larger"
-                            ans_a = "Smaller"
-                            ans_ = "Yes"
-                            ans__ = "No"
-                        elif subset_dict[subset][3][0] == subset_dict[subset_][3][0]:
-                            ans = "Almost Same"
-                            ans_a = "Almost Same"
-                            ans_ = "No"
-                            ans__ = "No"
-                        else:
-                            ans = "Smaller"
-                            ans_a = "Larger"
-                            ans_ = "No"
-                            ans__ = "Yes"
-                        qst_list.append(
-                            [
-                                "How about the area of %ss in this picture compared to %ss ?"
-                                % (subset, subset_),
-                                ans,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "How about the area of %ss in this picture compared to %ss ?"
-                                % (subset_, subset),
-                                ans_a,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "Whether the area of %ss in this picture is greater than the area of %ss ?"
-                                % (subset, subset_),
-                                ans_,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "Whether the area of %ss in this picture is greater than the area of %ss ?"
-                                % (subset_, subset),
-                                ans__,
-                            ]
-                        )
-                    # Compare length
-                    if (
-                        subset_dict[subset][4][1] != "none"
-                        and subset_dict[subset_][4][1] != "none"
-                    ):
-                        if subset_dict[subset][4][0] > subset_dict[subset_][4][0]:
-                            ans = "Longer"
-                            ans_a = "Shorter"
-                            ans_ = "Yes"
-                            ans__ = "No"
-                        elif subset_dict[subset][4][0] == subset_dict[subset_][4][0]:
-                            ans = "almost same"
-                            ans_a = "almost same"
-                            ans_ = "No"
-                            ans__ = "No"
-                        else:
-                            ans = "Shorter"
-                            ans_a = "Longer"
-                            ans_ = "No"
-                            ans__ = "Yes"
-                        qst_list.append(
-                            [
-                                "How about the length of %ss in this picture compared to %ss ?"
-                                % (subset, subset_),
-                                ans,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "How about the length of %ss in this picture compared to %ss ?"
-                                % (subset_, subset),
-                                ans_a,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "Whether the length of %ss in this picture is greater than the area of %ss ?"
-                                % (subset, subset_),
-                                ans_,
-                            ]
-                        )
-                        qst_list.append(
-                            [
-                                "Whether the length of %ss in this picture is greater than the area of %ss ?"
-                                % (subset_, subset),
-                                ans__,
-                            ]
-                        )
-                    m = m + 1
 
-            for qst_ans in qst_list:
-                self.jion_current_dict("4%d" % counter, qst_ans)
-                counter = counter + 1
-            self.join_attribute_dict("PresContain", self.contain_dict)
-
-    # Generate traffic questions
-    def generate_traffic(self):
-        qst_list = []
-        counter = 1  # Used to number the questions
-        if self.question_traffic.isChecked() and len(self.traffic_dict) > 0:
-            land_cover_list = []
-            landcover_dict = {}
-            landcover_atri_dict = {}
-            object_dict = {}
-            object_list = []
-            for k, v in self.traffic_dict.items():
-                land_cover_list.append(k)
-                temp = []
-                for object in v:
-                    temp.append(object[0][1])
-                    object_dict[object[0][1]] = object[1:]
-                    object_list.append(object[0][1])
-                landcover_dict[k] = temp
-
-            for n in range(len(land_cover_list)):
-                landcover = land_cover_list[n]
-                qst_list.append(
-                    [
-                        "How many %s classes are in this picture ?" % landcover,
-                        "%d" % len(landcover_dict[landcover]),
-                    ]
-                )
-                if len(landcover_dict[landcover]) == 1:
-                    qst_list.append(
-                        [
-                            "What %s classes are in this picture ?" % landcover,
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                elif len(landcover_dict[landcover]) == 2:
-                    qst_list.append(
-                        [
-                            "In addition to the %ss, which %s classes does this picture contain ?"
-                            % (landcover_dict[landcover][0], landcover),
-                            landcover_dict[landcover][1],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss, which %s classes does this picture contain ?"
-                            % (landcover_dict[landcover][1], landcover),
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                elif len(landcover_dict[landcover]) == 3:
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][0],
-                                landcover_dict[landcover][1],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][2],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][0],
-                                landcover_dict[landcover][2],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][1],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][1],
-                                landcover_dict[landcover][2],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                else:
-                    pass
-            # The presence of object
-            non_object_list = [
-                object
-                for object in self.traffic_object_list
-                if object not in object_list
-            ]
-            random.shuffle(non_object_list)
-            if len(object_list) <= len(non_object_list):
-                num = len(object_list)
-            else:
-                num = len(non_object_list)
-            for i in range(num):
-                qst_list.append(
-                    ["Are there some %ss present ?" % object_list[n], "Yes"]
-                )
-                qst_list.append(
-                    ["Are there some %ss present ?" % non_object_list[n], "No"]
-                )
-                qst_list.append(
-                    ["How many %ss are in this picture ?" % non_object_list[n], "0"]
-                )
-
-            # Other questions for object
-            for n in range(len(object_list)):
-                object = object_list[n]
-                # number question
-                if object_dict[object][0][1] != "none":
-                    qst_list.append(
-                        [
-                            "How many %ss are in this picture ?" % object,
-                            object_dict[object][0][1],
-                        ]
-                    )
-                # location question
-                if object_dict[object][1][1] != "none":
-                    qst_list.append(
-                        [
-                            "Where is the most part of %ss ?" % object,
-                            object_dict[object][1][1],
-                        ]
-                    )
-                # better question
-                if object_dict[object][2][1] != "none":
-                    qst_list.append(
-                        [
-                            "Which picture has %ss in it is better ?" % object,
-                            object_dict[object][2][1],
-                        ]
-                    )
-
-            for qst_ans in qst_list:
-                self.jion_current_dict("6%d" % counter, qst_ans)
-                counter = counter + 1
-            self.join_attribute_dict("Traffic", self.traffic_dict)
-
-    # Generate residential questions
-    def generate_residential(self):
-        qst_list = []
-        counter = 1
-        if self.question_residential.isChecked() and len(self.residential_dict) > 0:
-            land_cover_list = []
-            landcover_dict = {}
-            landcover_atri_dict = {}
-            object_dict = {}
-            object_list = []
-            for k, v in self.residential_dict.items():
-                land_cover_list.append(k)
-                temp = []
-                for object in v:
-                    temp.append(object[0][1])
-                    object_dict[object[0][1]] = object[1:]
-                    object_list.append(object[0][1])
-                landcover_dict[k] = temp
-
-            for n in range(len(land_cover_list)):
-                landcover = land_cover_list[n]
-                qst_list.append(
-                    [
-                        "How many %s classes are in this picture ?" % landcover,
-                        "%d" % len(landcover_dict[landcover]),
-                    ]
-                )
-                if len(landcover_dict[landcover]) == 1:
-                    qst_list.append(
-                        [
-                            "What %s classes are in this picture ?" % landcover,
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                elif len(landcover_dict[landcover]) == 2:
-                    qst_list.append(
-                        [
-                            "In addition to the %ss, which %s classes does this picture contain ?"
-                            % (landcover_dict[landcover][0], landcover),
-                            landcover_dict[landcover][1],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss, which %s classes does this picture contain ?"
-                            % (landcover_dict[landcover][1], landcover),
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                elif len(landcover_dict[landcover]) == 3:
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][0],
-                                landcover_dict[landcover][1],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][2],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][0],
-                                landcover_dict[landcover][2],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][1],
-                        ]
-                    )
-                    qst_list.append(
-                        [
-                            "In addition to the %ss and %ss, which %s classes does this picture contain ?"
-                            % (
-                                landcover_dict[landcover][1],
-                                landcover_dict[landcover][2],
-                                landcover,
-                            ),
-                            landcover_dict[landcover][0],
-                        ]
-                    )
-                else:
-                    pass
-            # The presence of object
-            non_object_list = [
-                object
-                for object in self.residential_object_list
-                if object not in object_list
-            ]
-            random.shuffle(non_object_list)
-            if len(object_list) <= len(non_object_list):
-                num = len(object_list)
-            else:
-                num = len(non_object_list)
-            for i in range(num):
-                qst_list.append(
-                    ["Are there some %ss present ?" % object_list[n], "Yes"]
-                )
-                qst_list.append(
-                    ["Are there some %ss present ?" % non_object_list[n], "No"]
-                )
-                qst_list.append(
-                    ["How many %ss are in this picture ?" % non_object_list[n], "0"]
-                )
-
-            # Other questions for object
-            for n in range(len(object_list)):
-                object = object_list[n]
-                # number question
-                if object_dict[object][0][1] != "none":
-                    qst_list.append(
-                        [
-                            "How many %ss are in this picture ?" % object,
-                            object_dict[object][0][1],
-                        ]
-                    )
-                # location question
-                if object_dict[object][1][1] != "none":
-                    qst_list.append(
-                        [
-                            "Where is the most part of %ss ?" % object,
-                            object_dict[object][1][1],
-                        ]
-                    )
-                # better question
-                if object_dict[object][2][1] != "none":
-                    qst_list.append(
-                        [
-                            "Which picture has %ss in it is better ?" % object,
-                            object_dict[object][2][1],
-                        ]
-                    )
-
-            for qst_ans in qst_list:
-                self.jion_current_dict("6%d" % counter, qst_ans)
-                counter = counter + 1
-            self.join_attribute_dict("Residential", self.residential_dict)
-
-    # Display the attribute information of the annotation
-
-    def display_attribution_(self):
-        if len(self.current_attri_dict) > 0:
-            self.display_anno.clear()
-            for k, v in self.current_attri_dict.items():
-                if (
-                    k == "match"
-                    or k == "theme"
-                    or k == "urban"
-                    or k == "Deduce_one"
-                    or k == "Deduce_two"
-                    or k == "mist"
-                    or k == "night"
-                    or k == "agricultural_road"
-                    or k == "water_source"
-                    or k == "logistics_facility"
-                    or k == "construction_scale"
-                    or k == "industrial_location"
-                    or k == "UAV_height"
-                    or k == "UAV_angle"
-                ):
-                    self.display_anno.append("%s:%s" % (k, v))
-                elif k == "LocDis":
-                    if len(v) > 0:
-                        for s in v:
-                            self.display_anno.append(
-                                "%s:(%s,%s):Loc %s, Dis %s"
-                                % (k, s[0], s[1], s[3], s[4])
-                            )
-                elif k == "PresContain":
-                    for m, l in v.items():
-                        if len(l) > 0:
-                            for s in l:
-                                self.display_anno.append(
-                                    "%s:\n(%s:%s):\nnum %s, Loc %s, Shape %s, Area %s, Len %s, Distri %s, Better %s"
-                                    % (
-                                        k,
-                                        m,
-                                        s[0],
-                                        s[1],
-                                        s[2],
-                                        s[3],
-                                        s[4],
-                                        s[5],
-                                        s[6],
-                                        s[7],
-                                    )
-                                )
-                elif k == "Traffic" or k == "Residential":
-                    for m, l in v.items():
-                        if len(l) > 0:
-                            for s in l:
-                                self.display_anno.append(
-                                    "%s:\n(%s:%s):\nnum %s, Loc %s, Better %s"
-                                    % (k, m, s[0], s[1], s[2], s[3])
-                                )
-
-    # #On February 9, 2024, it was revised. To correct "PreContain", only "preContain" was displayed in the annotation
-    # def display_attribution(self):
-    #     if len(self.current_attri_dict)>0:
-    #         self.display_anno.clear()
-    #         for k,v in self.current_attri_dict.items():
-    #             if k=='PresContain':
-    #                 for m,l in v.items():
-    #                     if len(l)>0:
-    #                         for s in l:
-    #                             self.display_anno.append('%s:\n(%s:%s):\nnum %s, Loc %s, Shape %s, Area %s, Len %s, Distri %s, Better %s'%(k,m,s[0],s[1],s[2],s[3],s[4],s[5],s[6],s[7]))
-
-    # On February 9, 2024, it was revised. To correct "PreContain", only "preContain" was displayed in the annotation
-    def display_attribution(self):
-        # if len(self.current_attri_dict) > 0:
-        #     self.display_anno.clear()
-        #     for k, v in self.current_attri_dict.items():
-        #         if k == 'match' or k == 'theme' or k == 'urban' or k == 'Deduce_one' or k == 'Deduce_two' or k == 'mist':
-        #             self.display_anno.append('%s:%s' % (k, v))
-        #         elif k == 'LocDis':
-        #             if len(v) > 0:
-        #                 for s in v:
-        #                     self.display_anno.append(
-        #                         '%s:(%s,%s):Loc %s, Dis %s' % (k, s[0], s[1], s[3], s[4]))
-        #         elif k == 'PresContain':
-        #             for m, l in v.items():
-        #                 if len(l) > 0:
-        #                     for s in l:
-        #                         self.display_anno.append('%s:\n(%s:%s):\nnum %s, Loc %s, Shape %s, Area %s, Len %s, Distri %s, Better %s' % (
-        #                             k, m, s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]))
-        if len(self.current_attri_dict) > 0:
-            self.display_anno.clear()
-            for k, v in self.current_attri_dict.items():
-                if (
-                    k == "match"
-                    or k == "theme"
-                    or k == "urban"
-                    or k == "Deduce_one"
-                    or k == "Deduce_two"
-                    or k == "mist"
-                    or k == "night"
-                    or k == "agricultural_road"
-                    or k == "water_source"
-                    or k == "logistics_facility"
-                    or k == "construction_scale"
-                    or k == "industrial_location"
-                    or k == "UAV_height"
-                    or k == "UAV_angle"
-                ):
-                    self.display_anno.append("%s:%s" % (k, v))
-                elif k == "LocDis":
-                    if len(v) > 0:
-                        for s in v:
-                            self.display_anno.append(
-                                "%s:(%s,%s):Loc %s, Dis %s"
-                                % (k, s[0], s[1], s[3], s[4])
-                            )
-                elif k == "PresContain":
-                    for m, l in v.items():
-                        if len(l) > 0:
-                            for s in l:
-                                self.display_anno.append(
-                                    "%s:\n(%s:%s):\nnum %s, Loc %s, Shape %s, Area %s, Len %s, Distri %s, Better %s"
-                                    % (
-                                        k,
-                                        m,
-                                        s[0],
-                                        s[1],
-                                        s[2],
-                                        s[3],
-                                        s[4],
-                                        s[5],
-                                        s[6],
-                                        s[7],
-                                    )
-                                )
-                elif k == "Traffic" or k == "Residential":
-                    for m, l in v.items():
-                        if len(l) > 0:
-                            for s in l:
-                                self.display_anno.append(
-                                    "%s:\n(%s:%s):\nnum %s, Loc %s, Better %s"
-                                    % (k, m, s[0], s[1], s[2], s[3])
-                                )
-
-    # Use cv2 to measure distance and area
-    def get_distance(self):
-        path = self.img_paths_rgb[self.counter]
-        image = img(path)
-        image.get_dis()
-
-    def get_area(self):
-        path = self.img_paths_rgb[self.counter]
-        image = img(path)
-        image.get_area()
-
-    # Select the address to save the annotation file
-    def pick_save(self):
-
+    # --- Folder Selection and File Handling ---
+    def select_save_folder(self):
         dialog = QFileDialog()
-        folder_path = dialog.getExistingDirectory(None, "Select Folder")
+        dialog.setFileMode(QFileDialog.DirectoryOnly)
+        folder_path = dialog.getExistingDirectory(self, "Select Folder to Save Annotations")
         if folder_path:
             self.selected_folder_label_save.setText(folder_path)
             self.save_folder = folder_path
-            anno_file_path = os.path.join(folder_path, "annotation_dict.json")
-            attri_file_path = os.path.join(folder_path, "attribution_dict.json")
+            # Try to load existing attribution file to resume
+            attri_file_path = os.path.join(self.save_folder, "image_attributes.json")
+            if os.path.exists(attri_file_path):
+                try:
+                    with open(attri_file_path, "r", encoding='utf-8') as f: # Added encoding
+                        loaded_attributes = json.load(f)
+                    if loaded_attributes:
+                        self.attribution_dict = loaded_attributes
+                        if "counter" in self.attribution_dict and self.num_rgb_images > 0 :
+                            self.current_image_index = self.attribution_dict["counter"] % self.num_rgb_images
+                        else:
+                            self.current_image_index = 0
+                        self._show_message(f"Resumed from existing annotations. Next image: {self.current_image_index + 1}")
+                except json.JSONDecodeError:
+                    self._show_warning("Error decoding existing attribution_dict.json. Starting fresh.")
+                    self.attribution_dict = {}
+                    self.current_image_index = 0
+                except Exception as e:
+                    self._show_warning(f"Error loading attribution_dict.json: {e}. Starting fresh.")
+                    self.attribution_dict = {}
+                    self.current_image_index = 0
 
-            # If the annotation file already exists, load it and locate the next image that has been annotated
-            if os.path.exists(anno_file_path) and os.path.exists(attri_file_path):
-                with open(anno_file_path, "r") as f:
-                    annotation_load = json.load(f)
-                with open(attri_file_path, "r") as f:
-                    attribution_load = json.load(f)
-                # if len(annotation_load)>0 and (len(annotation_load)+1)==len(attribution_load) :
-                if len(attribution_load) > 0:
-
-                    self.annotation_dict = annotation_load
-                    self.attribution_dict = attribution_load
-                    if "counter" in self.attribution_dict:
-                        self.counter = self.attribution_dict["counter"] % self.num_rgb
-                    else:
-                        self.counter = 0
             else:
-                self.counter = 0  # There is no already annotated file, do nothing
+                self.current_image_index = 0 # No existing file, start from the beginning
+                self.attribution_dict = {} # Ensure it's initialized
 
-            # Update the current buffer and display the image and related information
-            self.update_current_variable()
-            self.display_rgb()
-            self.display_tir()
-            self.display_attribution()
-            # self.display_current_annotation()
+            # Update UI if folders are already selected
+            if self.selected_folder_rgb and self.selected_folder_tir:
+                self._update_image_display_and_attributes()
 
-    # Select the location to save the rgb file
-
-    def pick_new_rgb(self):
-
+    def select_rgb_folder(self):
         dialog = QFileDialog()
-        folder_path = dialog.getExistingDirectory(None, "Select Folder")
+        dialog.setFileMode(QFileDialog.DirectoryOnly)
+        folder_path = dialog.getExistingDirectory(self, "Select OPT (Optical) Image Folder")
         if folder_path:
             self.selected_folder_label_rgb.setText(folder_path)
             self.selected_folder_rgb = folder_path
-            if len(self.tir_name) > 0:
-                # This step needs to be modified according to different image naming conventions
-                self.rgb_name = self.tir_name
-            else:
-                _, self.rgb_name = get_img_paths(
-                    self.selected_folder_rgb
-                )  # Get the path of the image file, return a list
-            self.rgb_name = [name for name in self.rgb_name if "tir" not in name]
-            self.img_paths_rgb = [
-                os.path.join(self.selected_folder_rgb, name) for name in self.rgb_name
-            ]  # Get the path of the image file, return a list
-            self.num_rgb = len(self.img_paths_rgb)
+            self.img_paths_rgb, self.rgb_names = get_img_paths(self.selected_folder_rgb)
+            self.num_rgb_images = len(self.img_paths_rgb)
+            if self.num_rgb_images == 0:
+                self._show_warning(f"No images found in OPT folder: {folder_path}")
+            # If TIR folder also selected, attempt to display first image
+            if self.selected_folder_tir:
+                 # Reset counter if save folder isn't set yet or doesn't have resume info
+                if not self.save_folder or "counter" not in self.attribution_dict:
+                    self.current_image_index = 0
+                self._update_image_display_and_attributes()
 
-    def pick_new_tir(self):
-        """
-        shows a dialog to choose folder with images to label
-        """
+
+    def select_tir_folder(self):
         dialog = QFileDialog()
-        folder_path = dialog.getExistingDirectory(None, "Select Folder")
+        dialog.setFileMode(QFileDialog.DirectoryOnly)
+        folder_path = dialog.getExistingDirectory(self, "Select THE (Thermal) Image Folder")
         if folder_path:
             self.selected_folder_label_tir.setText(folder_path)
             self.selected_folder_tir = folder_path
-            # Ensure the order of images in the folder is consistent
-            if len(self.rgb_name) > 0:
-                self.tir_name = self.rgb_name
-            else:
-                _, self.tir_name = get_img_paths(
-                    self.selected_folder_tir
-                )  # Get the path of the image file, return a list
-            self.tir_name = [name for name in self.tir_name if "rgb" not in name]
-            self.img_paths_tir = [
-                os.path.join(self.selected_folder_tir, name) for name in self.tir_name
-            ]  # Get the path of the image file, return a list
-            self.num_tir = len(self.img_paths_tir)
+            self.img_paths_tir, self.tir_names = get_img_paths(self.selected_folder_tir)
+            self.num_tir_images = len(self.img_paths_tir)
+            if self.num_tir_images == 0:
+                self._show_warning(f"No images found in THE folder: {folder_path}")
+            # If RGB folder also selected, attempt to display first image
+            if self.selected_folder_rgb:
+                if not self.save_folder or "counter" not in self.attribution_dict:
+                    self.current_image_index = 0
+                self._update_image_display_and_attributes()
 
-    # Display rgb image and related information
 
-    def display_rgb(self):
-        if (
-            os.path.exists(self.selected_folder_rgb)
-            and len(self.img_paths_rgb) > self.counter
-        ):
-            self.set_image_rgb(self.img_paths_rgb[self.counter])  # Display the first image
-            self.image_box_rgb.setGeometry(
-                20, 145, self.img_panel_width, self.img_panel_height
-            )
-            self.image_box_rgb.setAlignment(Qt.AlignTop)  #
-            # Display the address of the current image, set it to be copyable
-            self.rgb_name_label.setGeometry(20, 120, 400, 20)
-            self.rgb_name_label.setStyleSheet("font-weight:bold;font-size:14px")
-            self.rgb_name_label.setText("Current RGB: " + self.rgb_name[self.counter])
-            # Display progress
-            self.progress_bar_rgb.setGeometry(350, 120, 100, 20)
-            self.progress_bar_rgb.setStyleSheet("font-weight:bold;font-size:14px")
-            self.progress_bar_rgb.setText(f"{self.counter+1} of {self.num_rgb}")
-            print(" ")
+    # --- Image Display and Navigation ---
+    def _display_single_image(self, image_path, image_label_widget, panel_width, panel_height):
+        """Helper to display an image in a QLabel, scaled to fit."""
+        if not image_path or not os.path.exists(image_path):
+            image_label_widget.clear()
+            image_label_widget.setText("Image not found")
+            return
 
-    # Display tir image and related information
-    def display_tir(self):
-        if (
-            os.path.exists(self.selected_folder_tir)
-            and len(self.img_paths_tir) > self.counter
-        ):
-            self.set_image_tir(self.img_paths_tir[self.counter])  # Display the first image
-            self.image_box_tir.setGeometry(
-                20 + self.img_panel_width,
-                145,
-                self.img_panel_width,
-                self.img_panel_height,
-            )
-            self.image_box_tir.setAlignment(Qt.AlignTop)
-            # Display the address of the current image, set it to be copyable
-            self.tir_name_label.setGeometry(20 + self.img_panel_width, 120, 400, 20)
-            self.tir_name_label.setStyleSheet("font-weight:bold;font-size:14px")
-            self.tir_name_label.setText("Current SAR: " + self.tir_name[self.counter])
-            # Display progress
-            self.progress_bar_tir.setGeometry(350 + self.img_panel_width, 120, 100, 20)
-            self.progress_bar_tir.setStyleSheet("font-weight:bold;font-size:14px")
-            self.progress_bar_tir.setText(f"{self.counter+1} of {self.num_tir}")
+        pixmap = QPixmap(image_path)
+        if pixmap.isNull():
+            image_label_widget.setText("Error loading image")
+            return
 
-    # Display the next image and update the related parameters
+        scaled_pixmap = pixmap.scaled(panel_width - 20, panel_height - 20, # Margin
+                                      Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        image_label_widget.setPixmap(scaled_pixmap)
+
+    def _update_image_display(self):
+        """Updates the displayed RGB and TIR images and their info labels."""
+        if self.num_rgb_images > 0 and self.current_image_index < self.num_rgb_images:
+            self._display_single_image(self.img_paths_rgb[self.current_image_index], self.image_box_rgb, self.img_panel_width, self.img_panel_height)
+            self.rgb_name_label.setText(f"OPT: {self.rgb_names[self.current_image_index]}")
+            self.progress_bar_rgb.setText(f"{self.current_image_index + 1} of {self.num_rgb_images}")
+        else:
+            self.image_box_rgb.clear()
+            self.rgb_name_label.setText("OPT: N/A")
+            self.progress_bar_rgb.setText("0 of 0")
+
+        if self.num_tir_images > 0 and self.current_image_index < self.num_tir_images:
+             # Assuming TIR images correspond by index if names don't match perfectly
+            tir_display_index = self.current_image_index
+            # Attempt to find matching TIR image by name (more robust)
+            if self.rgb_names and self.tir_names and self.current_image_index < len(self.rgb_names):
+                current_rgb_base_name, _ = os.path.splitext(self.rgb_names[self.current_image_index])
+                # Adapt this matching logic if your naming convention is different
+                # Example: rgb_001.jpg -> tir_001.jpg or optical_001.png -> thermal_001.png
+                potential_tir_name_variants = [
+                    current_rgb_base_name.replace("rgb", "tir", 1) + ext for ext in [".jpg", ".png", ".jpeg"]
+                ] + [
+                    current_rgb_base_name.replace("optical", "thermal", 1) + ext for ext in [".jpg", ".png", ".jpeg"]
+                ] + [
+                     current_rgb_base_name + ext for ext in [".jpg", ".png", ".jpeg"] # if names are identical but in different folders
+                ]
+
+
+                found_match = False
+                for tir_idx, tir_name_iter in enumerate(self.tir_names):
+                    if tir_name_iter in potential_tir_name_variants or os.path.splitext(tir_name_iter)[0] == current_rgb_base_name : # Simpler match if prefix is same
+                        tir_display_index = tir_idx
+                        found_match = True
+                        break
+                if not found_match and self.num_rgb_images == self.num_tir_images:
+                    # Fallback to index if no name match but counts are same
+                    tir_display_index = self.current_image_index
+                elif not found_match:
+                    self.image_box_tir.setText("No matching THE image found by name.")
+                    self.tir_name_label.setText("THE: N/A")
+                    self.progress_bar_tir.setText(f"{self.current_image_index + 1} of {self.num_tir_images} (approx)")
+                    return # Don't try to display if no good match
+
+            if tir_display_index < self.num_tir_images:
+                self._display_single_image(self.img_paths_tir[tir_display_index], self.image_box_tir, self.img_panel_width, self.img_panel_height)
+                self.tir_name_label.setText(f"THE: {self.tir_names[tir_display_index]}")
+                self.progress_bar_tir.setText(f"{tir_display_index + 1} of {self.num_tir_images}")
+            else: # Should not happen if logic above is correct
+                self.image_box_tir.clear()
+                self.tir_name_label.setText("THE: Index out of bounds")
+                self.progress_bar_tir.setText("Error")
+
+        else:
+            self.image_box_tir.clear()
+            self.tir_name_label.setText("THE: N/A")
+            self.progress_bar_tir.setText("0 of 0")
 
     def show_next_image(self):
+        if not self.selected_folder_rgb or not self.selected_folder_tir or not self.save_folder:
+            self._show_warning("Please select RGB, TIR, and Save folders first.")
+            return
+        if self.num_rgb_images == 0:
+             self._show_warning("No images loaded in the OPT folder.")
+             return
 
-        # if self.current_rgb_name in self.annotation_dict: #The current image annotation has been submitted
-        if self.current_rgb_name in self.attribution_dict:  # The current image annotation has been submitted
+        # Ensure current annotations are "saved" to memory before moving
+        self.save_current_image_annotations_to_memory(show_success_message=False)
 
-            if self.counter < self.num_rgb - 1:  # not the last image
-                self.counter += 1
-                self.update_current_variable()  # update parameters
-                self.display_rgb()
-                self.display_tir()
-                self.init_pannel()
-                # self.display_current_annotation()
-                self.display_attribution()
-            else:
-                self.Warn_Erorr("This is the last image. Thank you for your annotations!")
+        if self.current_image_index < self.num_rgb_images - 1:
+            self.current_image_index += 1
+            self._update_image_display_and_attributes()
         else:
-            self.Warn_Erorr("Please submit the current annotations first")
+            self._show_message("This is the last image. Annotations complete or save all to file.")
 
-    # Display the previous image
-    def show_prev_image(self):
+    def show_previous_image(self):
+        if not self.selected_folder_rgb or not self.selected_folder_tir or not self.save_folder:
+            self._show_warning("Please select RGB, TIR, and Save folders first.")
+            return
+        if self.num_rgb_images == 0:
+             self._show_warning("No images loaded in the OPT folder.")
+             return
 
-        # if self.current_rgb_name in self.annotation_dict:#The current annotation has been submitted
-        if self.current_rgb_name in self.attribution_dict:  # The current image annotation has been submitted
+        self.save_current_image_annotations_to_memory(show_success_message=False)
 
-            if self.counter > 0:  # not the first image
-                self.counter -= 1
-                self.update_current_variable()
-                self.display_rgb()
-                self.display_tir()
-                self.init_pannel()
-                # self.display_current_annotation()
-                self.display_attribution()
-            else:
-                self.Warn_Erorr("This is the first image, work is just beginning")
+        if self.current_image_index > 0:
+            self.current_image_index -= 1
+            self._update_image_display_and_attributes()
         else:
-            self.Warn_Erorr("Please submit the current annotations first")
+            self._show_message("This is the first image.")
 
-    # Display the image
+    def _update_image_display_and_attributes(self):
+        """Central function to call when image changes or folders are selected."""
+        if not self.img_paths_rgb or self.current_image_index >= len(self.img_paths_rgb):
+            # This can happen if folders are selected but then cleared, or index is bad
+            self._clear_ui_for_new_image() # Clear everything if no valid image
+            return
 
-    def set_image_rgb(self, path_rgb):
-        """
-        displays the image in GUI
-        :param path: relative path to the image that should be show
-        """
-
-        pixmap = QPixmap(path_rgb)
-
-        # get original image dimensions
-        img_width = pixmap.width()
-        img_height = pixmap.height()
-
-        # scale the image properly so it fits into the image window ()
-        margin = 20
-        if img_width >= img_height:
-            pixmap = pixmap.scaledToWidth(self.img_panel_width - margin)
-
+        self.current_rgb_name = self.rgb_names[self.current_image_index]
+        # Try to get corresponding TIR name (logic might need adjustment based on naming)
+        # For now, assume TIR name matches RGB name if counts are equal, or use index
+        if self.num_rgb_images == self.num_tir_images and self.current_image_index < len(self.tir_names):
+            self.current_tir_name = self.tir_names[self.current_image_index]
+        elif self.current_image_index < len(self.tir_names): # If TIR has more images, use corresponding index
+             self.current_tir_name = self.tir_names[self.current_image_index]
         else:
-            pixmap = pixmap.scaledToHeight(self.img_panel_height - margin)
+            self.current_tir_name = "N/A" # Or handle mismatch
 
-        self.image_box_rgb.setPixmap(pixmap)
+        self._update_image_display()
+        self._load_annotations_for_current_image() # Load existing annotations
+        self._reset_annotation_panel_ui()          # Reset UI elements to reflect loaded or new state
+        self._display_current_attributes_in_log()  # Show loaded/current attributes
 
-    def set_image_tir(self, path_tir):
-        """
-        displays the image in GUI
-        :param path: relative path to the image that should be show
-        """
+    def _clear_ui_for_new_image(self):
+        """Clears image displays, info labels, and annotation panel."""
+        self.image_box_rgb.clear()
+        self.image_box_tir.clear()
+        self.rgb_name_label.setText("OPT: N/A")
+        self.progress_bar_rgb.setText("0 of 0")
+        self.tir_name_label.setText("THE: N/A")
+        self.progress_bar_tir.setText("0 of 0")
+        self.current_image_attributes = {}
+        self.dis_loc_details = {}
+        self.contain_details = {}
+        self.traffic_details = {}
+        self.residential_details = {}
+        self._reset_annotation_panel_ui()
+        self.display_anno_log.clear()
 
-        pixmap = QPixmap(path_tir)
 
-        # get original image dimensions
-        img_width = pixmap.width()
-        img_height = pixmap.height()
+    def _reset_annotation_panel_ui(self):
+        """Resets all checkboxes and comboboxes in the annotation panel."""
+        self.allow_modification = False # Prevent signals during reset
+        for chk_box in self.all_checkboxes:
+            chk_box.setChecked(False) # Default to unchecked
 
-        # scale the image properly so it fits into the image window ()
-        margin = 20
-        if img_width >= img_height:
-            pixmap = pixmap.scaledToWidth(self.img_panel_width - margin)
-
-        else:
-            pixmap = pixmap.scaledToHeight(self.img_panel_height - margin)
-
-        self.image_box_tir.setPixmap(pixmap)
-
-    # Add answers to buffer first, then write all at once, can only modify in buffer
-    # How to handle modifications: first load image annotations into buffer
-
-    # Add annotated questions to buffer and display annotation information
-    def jion_current_dict(self, id, tri_list):
-        if self.flag == True:
-            if len(tri_list) > 0:
-                if len(self.current_qst_dict) == 0:
-                    self.current_qst_dict[id] = tri_list
+        for widget in self.all_comboboxes_and_lineedits:
+            if isinstance(widget, QComboBox):
+                widget.setCurrentIndex(0) # Reset to the first item (placeholder)
+            elif isinstance(widget, QLineEdit):
+                # Reset to placeholder text if defined, otherwise clear
+                if "custom attribute 1 key" in widget.placeholderText() or "Enter custom attribute 1 key" == widget.text():
+                     widget.setText("Enter custom attribute 1 key")
+                elif "attribute 1 value" in widget.placeholderText() or "Enter attribute 1 value" == widget.text():
+                     widget.setText("Enter attribute 1 value")
+                elif "custom attribute 2 key" in widget.placeholderText() or "Enter custom attribute 2 key" == widget.text():
+                     widget.setText("Enter custom attribute 2 key")
+                elif "attribute 2 value" in widget.placeholderText() or "Enter attribute 2 value" == widget.text():
+                     widget.setText("Enter attribute 2 value")
                 else:
-                    temp_dict = self.current_qst_dict.copy()
-                    for k, v in temp_dict.items():
-                        if tri_list[0] == v[0]:
-                            self.current_qst_dict[k] = tri_list
-                        else:
-                            self.current_qst_dict[id] = tri_list
-                # self.display_current_annotation()
-                # self.display_attribution()
+                    widget.clear()
 
-    # Submit the file in the buffer
+        # Now, load existing attributes and set UI elements accordingly
+        if self.current_rgb_name in self.attribution_dict:
+            attrs = self.attribution_dict[self.current_rgb_name]
+            # Simple attributes
+            if "match_condition" in attrs: self.chk_match.setChecked(True); self.match_options_box.setCurrentText(attrs["match_condition"])
+            if "mist_condition" in attrs: self.chk_match.setChecked(True); self.mist_options_box.setCurrentText(attrs["mist_condition"])
+            if "darkness_condition" in attrs: self.chk_match.setChecked(True); self.night_options_box.setCurrentText(attrs["darkness_condition"])
+            if "area_type" in attrs: self.chk_theme.setChecked(True); self.theme_residential_box.setCurrentText(attrs["area_type"])
+            if "scene_macro_category" in attrs: self.chk_theme.setChecked(True); self.theme_urban_rural_box.setCurrentText(attrs["scene_macro_category"])
+            if "agricultural_road" in attrs: self.chk_agricultural.setChecked(True); self.agri_road_box.setCurrentText(attrs["agricultural_road"])
+            if "agricultural_water" in attrs: self.chk_agricultural.setChecked(True); self.agri_water_box.setCurrentText(attrs["agricultural_water"])
+            if "industrial_facility" in attrs: self.chk_industrial.setChecked(True); self.ind_facility_box.setCurrentText(attrs["industrial_facility"])
+            if "industrial_scale" in attrs: self.chk_industrial.setChecked(True); self.ind_scale_box.setCurrentText(attrs["industrial_scale"])
+            if "industrial_location" in attrs: self.chk_industrial.setChecked(True); self.ind_location_box.setCurrentText(attrs["industrial_location"])
+            if "uav_height" in attrs: self.chk_uav.setChecked(True); self.uav_height_box.setCurrentText(attrs["uav_height"])
+            if "uav_angle" in attrs: self.chk_uav.setChecked(True); self.uav_angle_box.setCurrentText(attrs["uav_angle"])
 
-    def submit_annotation(self):
+            # Complex attributes (LocDis, PresContain, Traffic, Residential) - these are loaded into their temporary dicts
+            # The UI for these is typically populated when their respective landcover/object boxes are changed by the user.
+            # Or, you could try to pre-fill the *first* item of a complex attribute if it exists.
+            if "LocDis" in attrs:
+                self.chk_dis_loc.setChecked(True)
+                self.dis_loc_details = {tuple(item[:2]): item[2:] for item in attrs["LocDis"]} # Rebuild dict
+            if "PresContain" in attrs:
+                self.chk_contain.setChecked(True)
+                self.contain_details = attrs["PresContain"] # This is already a dict
+            if "Traffic" in attrs:
+                self.chk_traffic.setChecked(True)
+                self.traffic_details = attrs["Traffic"]
+            if "Residential" in attrs:
+                self.chk_residential.setChecked(True)
+                self.residential_details = attrs["Residential"]
 
-        if len(self.current_qst_dict) > 0 and len(self.current_attri_dict) > 0:
-            if self.current_rgb_name == self.current_tir_name:
-                # self.annotation_dict[self.current_tir_name] = self.current_qst_dict
-                self.attribution_dict[self.current_tir_name] = self.current_attri_dict
-                # self.annotation_dict[self.current_tir_name] = self.current_qst_dict
-                # self.attribution_dict[self.current_tir_name] = self.current_attri_dict
-                self.generate_annotation()
-                self.display_anno.clear()
-                self.display_anno.append("Annotation submitted and generated successfully")
+            # Custom Deduce attributes
+            # This requires iterating through attrs to find keys not matching predefined ones
+            # Or, if Deduce attributes are stored under a specific key like "CustomAttributes":
+            if "CustomAttributes" in attrs and isinstance(attrs["CustomAttributes"], dict):
+                self.chk_deduce.setChecked(True)
+                custom_attr_list = list(attrs["CustomAttributes].items())
+                if len(custom_attr_list) > 0:
+                    self.deduce_q1_input.setText(custom_attr_list[0][0])
+                    self.deduce_a1_input.setText(str(custom_attr_list[0][1])) # Ensure string
+                    self.deduce_q1_input.setProperty("custom_key", custom_attr_list[0][0])
+                if len(custom_attr_list) > 1:
+                    self.deduce_q2_input.setText(custom_attr_list[1][0])
+                    self.deduce_a2_input.setText(str(custom_attr_list[1][1]))
+                    self.deduce_q2_input.setProperty("custom_key", custom_attr_list[1][0])
 
-    # Display error feedback
-    def Warn_Erorr(self, str):
 
-        self.display_anno.clear()
-        self.display_anno.append(str)
+        self.allow_modification = True
 
-    # Generate annotation file
 
-    def generate_annotation(self):
-        save_path_anno = os.path.join(self.save_folder, "annotation_dict.json")
-        save_path_attri = os.path.join(self.save_folder, "attribution_dict.json")
-        self.attribution_dict["counter"] = self.counter + 1
+    # --- Annotation Saving and Loading ---
+    def _load_annotations_for_current_image(self):
+        """Loads annotations for the current image from self.attribution_dict."""
+        self.current_image_attributes = {} # Clear previous
+        self.dis_loc_details = {}
+        self.contain_details = {}
+        self.traffic_details = {}
+        self.residential_details = {}
 
-        # if len(self.annotation_dict) > 0 and len(self.attribution_dict) > 0:
-        if len(self.attribution_dict) > 0:
-            with open(save_path_anno, "w") as f:
-                json.dump(self.annotation_dict, f, indent=4)
+        if self.current_rgb_name in self.attribution_dict:
+            self.current_image_attributes = self.attribution_dict[self.current_rgb_name].copy() # Load a copy
+            # If complex attributes are stored directly, load them into their temp dicts
+            if "LocDis" in self.current_image_attributes and isinstance(self.current_image_attributes["LocDis"], list):
+                self.dis_loc_details = {tuple(item[:2]): item[2:] for item in self.current_image_attributes["LocDis"]}
+            if "PresContain" in self.current_image_attributes and isinstance(self.current_image_attributes["PresContain"], dict):
+                self.contain_details = self.current_image_attributes["PresContain"].copy()
+            if "Traffic" in self.current_image_attributes and isinstance(self.current_image_attributes["Traffic"], dict):
+                self.traffic_details = self.current_image_attributes["Traffic"].copy()
+            if "Residential" in self.current_image_attributes and isinstance(self.current_image_attributes["Residential"], dict):
+                self.residential_details = self.current_image_attributes["Residential"].copy()
+        # The UI will be updated by _reset_annotation_panel_ui after this
 
-            with open(save_path_attri, "w") as f:
-                json.dump(self.attribution_dict, f, indent=4)
+    def save_current_image_annotations_to_memory(self, show_success_message=True):
+        """Saves the current_image_attributes to the main self.attribution_dict."""
+        if not self.current_rgb_name:
+            if show_success_message: # Only show warning if user explicitly clicked save
+                 self._show_warning("No current image selected to save annotations for.")
+            return
 
-            self.Warn_Erorr("Annotation file generated successfully")
-        else:
-            self.Warn_Erorr("File generation failed")
+        # Finalize any pending complex attributes before saving
+        if self.chk_dis_loc.isChecked() and self.dis_loc_details : self._finalize_disloc_attributes()
+        if self.chk_contain.isChecked() and self.contain_details : self._finalize_contain_attributes()
+        if self.chk_traffic.isChecked() and self.traffic_details : self._finalize_traffic_attributes()
+        if self.chk_residential.isChecked() and self.residential_details: self._finalize_residential_attributes()
 
-    # Automatically save when the window is closed
+
+        if self.current_image_attributes: # Only save if there are attributes
+            self.attribution_dict[self.current_rgb_name] = self.current_image_attributes.copy() # Save a copy
+            if show_success_message:
+                self._show_message(f"Attributes for '{self.current_rgb_name}' saved to memory.")
+        elif self.current_rgb_name in self.attribution_dict: # If no current attributes but was previously saved, remove it
+            del self.attribution_dict[self.current_rgb_name]
+            if show_success_message:
+                self._show_message(f"Cleared attributes for '{self.current_rgb_name}' from memory.")
+
+
+    def save_all_annotations_to_file(self):
+        """Saves the entire self.attribution_dict to a JSON file."""
+        if not self.save_folder:
+            self._show_warning("Please select a save folder first.")
+            return
+        if not self.attribution_dict:
+            self._show_message("No annotations to save to file.")
+            return
+
+        # Before saving, ensure the current image's annotations are in memory
+        self.save_current_image_annotations_to_memory(show_success_message=False)
+
+        # Add/update the counter for resuming
+        self.attribution_dict["counter"] = self.current_image_index
+
+        file_path = os.path.join(self.save_folder, "image_attributes.json")
+        try:
+            with open(file_path, "w", encoding='utf-8') as f: # Added encoding
+                json.dump(self.attribution_dict, f, indent=4, sort_keys=True)
+            self._show_message(f"All annotations successfully saved to:\n{file_path}")
+        except Exception as e:
+            self._show_warning(f"Error saving annotations to file: {e}")
+
+
+    # --- UI Helper Methods (Warnings, Messages) ---
+    def _show_warning(self, message):
+        self.display_anno_log.clear()
+        self.display_anno_log.setText(f"WARNING: {message}")
+        # QtWidgets.QMessageBox.warning(self, "Warning", message) # Alternative: use QMessageBox
+
+    def _show_message(self, message):
+        self.display_anno_log.clear()
+        self.display_anno_log.setText(f"INFO: {message}")
+        # QtWidgets.QMessageBox.information(self, "Information", message)
 
     def closeEvent(self, event):
-        self.generate_annotation()
-
-    # After switching images, reset the question box
-    def init_pannel(self):
-        # Remove the image checkbox
-        self.init_ans_qst()
-
-    # Display the current annotation content
-    def display_current_annotation(self):
-        if len(self.current_qst_dict) > 0:
-            self.display_anno.clear()
-            index = sorted(self.current_qst_dict)
-            for q_id in index:
-                current_list = self.current_qst_dict[q_id]
-                if len(self.current_qst_dict[q_id]) > 0:
-                    self.display_anno.append(
-                        "Question %s-%s: %s\nAnswer: %s"
-                        % (q_id[0], q_id[1:], current_list[0], current_list[1])
-                    )
+        """Handles the window close event to auto-save annotations."""
+        reply = QtWidgets.QMessageBox.question(self, 'Confirm Exit',
+                                           "Save all annotations before exiting?",
+                                           QtWidgets.QMessageBox.Save | QtWidgets.QMessageBox.Discard | QtWidgets.QMessageBox.Cancel,
+                                           QtWidgets.QMessageBox.Save)
+        if reply == QtWidgets.QMessageBox.Save:
+            self.save_all_annotations_to_file()
+            event.accept()
+        elif reply == QtWidgets.QMessageBox.Discard:
+            event.accept()
         else:
-            self.display_anno.clear()
-
-    # Initialize checkboxes and combo boxes
-    def init_ans_qst(self):
-        self.flag = False
-        for qst in self.question_list:
-            if qst.isChecked():
-                qst.setChecked(False)
-        for index, ans in enumerate(self.ans_list, start=1):
-            if index < 22:
-                ans.setCurrentIndex(0)
-            elif index == 22:
-                self.Deduce_Qst_one.setText("Enter your question 1 (one-word answer)")
-            elif index == 23:
-                self.Deduce_Ans_one.setText("Enter answer")
-
-            elif index == 24:
-                self.Deduce_Qst_two.setText("Enter your question 2 (one-word answer)")
-
-            else:
-                self.Deduce_Ans_two.setText("Enter answer")
-        self.flag = True
-
-    # After switching images, update the related variables
-    def update_current_variable(self):
-
-        if len(self.rgb_name) > self.counter and len(self.tir_name) > self.counter:
-            self.current_rgb_name = self.rgb_name[self.counter]
-            self.current_tir_name = self.tir_name[self.counter]
-        if self.current_rgb_name == self.current_tir_name:
-            if len(self.annotation_dict) > 0:
-                if self.current_rgb_name in self.annotation_dict:
-                    self.current_qst_dict = self.annotation_dict[self.current_tir_name]
-                else:
-                    self.current_qst_dict = {}
-
-                # Update the attribute dictionary
-            if len(self.attribution_dict) > 0:
-                if self.current_rgb_name in self.attribution_dict:
-                    self.current_attri_dict = self.attribution_dict[
-                        self.current_tir_name
-                    ]
-                    if self.contain_dict is not None:
-                        if "PresContain" in self.current_attri_dict:
-                            self.contain_dict = self.current_attri_dict["PresContain"]
-                        else:
-                            self.contain_dict = {}
-                    if self.traffic_dict is not None:
-                        if "Traffic" in self.current_attri_dict:
-                            self.traffic_dict = self.current_attri_dict["Traffic"]
-                        else:
-                            self.traffic_dict = {}
-                    if self.residential_dict is not None:
-                        if "Residential" in self.current_attri_dict:
-                            self.residential_dict = self.current_attri_dict[
-                                "Residential"
-                            ]
-                        else:
-                            self.residential_dict = {}
-                else:
-                    self.current_attri_dict = {}
-                    self.contain_dict = {}
-                    self.traffic_dict = {}
-                    self.residential_dict = {}
-                self.display_attribution()
-        self.display_anno.clear()
-        self.dis_loc_dict = {}
-
-    # Delete some questions, when modifying annotations, just switch to the current image
-    def del_annotation(self, q_id="0", q="0"):
-        if self.flag == True:
-            if q == "0":
-                if (
-                    len(self.current_qst_dict) > 0
-                    and q_id in self.current_qst_dict
-                    and len(self.current_qst_dict[q_id]) > 0
-                ):
-                    self.current_qst_dict.pop(q_id)
-            else:
-                if len(self.current_qst_dict) > 0:
-                    pop_list = []
-                    for k in self.current_qst_dict:
-                        if k[0] == q:
-                            pop_list.append(k)
-                    for e in pop_list:
-                        self.current_qst_dict.pop(e)
-
-    def ans_mist(self):
-        if self.Mist_pick_box.currentIndex() != 0:
-            tri_list = []
-            qst = "Is there mist in the picture?"
-            ans = self.Mist_pick_box.currentText()
-            tri_list.append(qst)
-            tri_list.append(ans)
-            self.jion_current_dict("2", tri_list)
-            self.join_attribute_dict("mist", ans)
-        else:
-            self.del_annotation(q_id="2")
-            self.del_attribute_dict("mist")
-
-    def ans_night(self):
-        if self.night_pick_box.currentIndex() != 0:
-            tri_list = []
-            qst = "Is it dark in the picture?"
-            ans = self.night_pick_box.currentText()
-            tri_list.append(qst)
-            tri_list.append(ans)
-            self.jion_current_dict("3", tri_list)
-            self.join_attribute_dict("night", ans)
-            self.display_attribution()  # Add this line to display annotation information
-        else:
-            self.del_annotation(q_id="3")
-            self.del_attribute_dict("night")
-            self.display_attribution()  # Add this line to update display
+            event.ignore()
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    ex = Annotation_window()
-    ex.show()
+    annotation_tool = AnnotationWindow()
+    annotation_tool.show()
     sys.exit(app.exec_())
-    print("")
