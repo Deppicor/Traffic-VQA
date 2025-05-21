@@ -28,16 +28,6 @@ Unmanned Aerial Vehicles (UAVs) provide crucial aerial perspectives for traffic 
 
 *   **[May, 2025]** Traffic-VQA dataset and annotations are now open-sourced on [🤗 Hugging Face Datasets](https://huggingface.co/datasets/YuYu2004/Traffic-VQA)!
 
-<--## 📊 Dataset Overview
-
-*(Consider adding a small, compelling image or GIF here showing an example from your dataset: e.g., a split view of optical/thermal with a sample question)*
-
-**Example:**
-*   **Image:** (Description of an image with optical and thermal views)
-*   **Question:** "If the red car continues at its current speed, will it likely need to brake for the pedestrian crossing the street in the thermal view?"
-*   **Answer:** "Yes, the pedestrian is not clearly visible in the optical view due to poor lighting, but the thermal signature indicates their presence and trajectory, suggesting the car will need to brake."
-
-(Add more details about dataset splits - train/val/test, number of images, QAs, etc. if you wish)-->
 
 ## 🚀 Getting Started
 
