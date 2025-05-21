@@ -2,7 +2,7 @@
 
 ## I. Introduction
 
-This graphical annotation tool, developed using PyQt5, facilitates the annotation of aligned optical (OPT) and thermal (THE) images. It allows users to annotate various aspects such as image matching, weather conditions, scene types, and traffic-related cognitive elements. Annotations are automatically saved to a user-specified directory. This tool is designed for building datasets for tasks like Multimodal Visual Question Answering (VQA) and image understanding.
+This graphical annotation tool, developed using PyQt5, facilitates the annotation of aligned optical (OPT) and thermal (TIR) images. It allows users to annotate various aspects such as image matching, weather conditions, scene types, and traffic-related cognitive elements. Annotations are automatically saved to a user-specified directory. This tool is designed for building datasets for tasks like Multimodal Visual Question Answering (VQA) and image understanding.
 
 ## II. System Requirements
 
@@ -189,4 +189,4 @@ For most categories, the general workflow is:
 
 ## VI. Contact and Feedback
 
-For suggestions, feature requests, or bug reports, please contact the development team via [Your Email Address or Issue Tracker Link Here].
+For suggestions, feature requests, or bug reports, please contact the development team via [wa2124207@stu.ahu.edu.cn].
