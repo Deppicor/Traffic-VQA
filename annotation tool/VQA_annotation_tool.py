@@ -1,6 +1,4 @@
-# This is the final version of the annotation tool. Questions are based on RGB image content, keeping two annotation files: annotation_dict (saves each question) and attribution_dict (saves attributes)
 # Version --- Added optical-thermal infrared questions
-# Version 1108 --- Modified questions and answers based on expanded dataset
 
 import json
 import sys
