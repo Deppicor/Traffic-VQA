@@ -143,21 +143,21 @@ class Annotation_window(QWidget):
         # Define variables to store important data
         # Define folder path storage locations
         self.selected_folder_rgb = ""
-        self.selected_folder_sar = ""
+        self.selected_folder_tir = ""
         self.save_folder = ""  # Folder to store annotation files
 
         # Absolute paths of image files
         self.img_paths_rgb = []
-        self.img_paths_sar = []
+        self.img_paths_tir = []
         # List of image file names
         self.rgb_name = []
-        self.sar_name = []
+        self.tir_name = []
         self.num_rgb = 0  # Total number of images in folder
-        self.num_sar = 0
+        self.num_tir = 0
         self.counter = 0  # Current image index
 
         # Store total data, initialize when loading annotation file
-        # Store total image annotation data {img_name:{q_id:[qst,ans],q_id:[qst,ans],...},sar2:{q_id:[qst,ans],q_id:[qst,ans],...},...}
+        # Store total image annotation data {img_name:{q_id:[qst,ans],q_id:[qst,ans],...},tir2:{q_id:[qst,ans],q_id:[qst,ans],...},...}
         self.annotation_dict = {}
 
         self.attribution_dict = ({})  # Store total image attributes {img_name:{attribute1:,attribute2:,...}}
@@ -168,7 +168,7 @@ class Annotation_window(QWidget):
 
         self.current_attri_dict = {}  # Store current attributes {attribute1:,attribute2:,...}
 
-        self.current_sar_name = ""  # Store current image name
+        self.current_tir_name = ""  # Store current image name
         self.current_rgb_name = ""
 
         self.flag = True  # When flag is true, annotation content can be modified
@@ -650,17 +650,17 @@ class Annotation_window(QWidget):
         # Define QLabel
         # Set titles
         self.headline_folder_rgb = QLabel("1.select OPT image folder:", self)
-        self.headline_folder_sar = QLabel("2.select THE image folder: ", self)
+        self.headline_folder_tir = QLabel("2.select TIR image folder: ", self)
         self.headline_folder_save = QLabel("3.select save folder: ", self)
 
         # Display output paths
         self.selected_folder_label_rgb = QLabel(self)
-        self.selected_folder_label_sar = QLabel(self)
+        self.selected_folder_label_tir = QLabel(self)
         self.selected_folder_label_save = QLabel(self)
 
         # Define browse buttons
         self.browse_button_rgb = QtWidgets.QPushButton("Browse OPT", self)
-        self.browse_button_sar = QtWidgets.QPushButton("Browse THE", self)
+        self.browse_button_tir = QtWidgets.QPushButton("Browse TIR", self)
         self.browse_button_save = QtWidgets.QPushButton("Browse SAVE", self)
 
         # Display annotated information
@@ -668,13 +668,13 @@ class Annotation_window(QWidget):
 
         # Image display area
         self.image_box_rgb = QLabel(self)  # Display RGB image
-        self.image_box_sar = QLabel(self)  # Display SAR image
+        self.image_box_tir = QLabel(self)  # Display SAR image
 
         # Display image information
         self.rgb_name_label = QLabel(self)  # Image name
         self.progress_bar_rgb = QLabel(self)  # Display progress
-        self.sar_name_label = QLabel(self)  # Image name
-        self.progress_bar_sar = QLabel(self)  # Display progress
+        self.tir_name_label = QLabel(self)  # Image name
+        self.progress_bar_tir = QLabel(self)  # Display progress
 
         # Annotation information title
         # Question title
@@ -820,15 +820,15 @@ class Annotation_window(QWidget):
 
         # RGB part control settings
         # Folder selection prompt
-        self.headline_folder_sar.setGeometry(20, 50, 250, 20)
-        self.headline_folder_sar.setObjectName("headline")
+        self.headline_folder_tir.setGeometry(20, 50, 250, 20)
+        self.headline_folder_tir.setObjectName("headline")
         # Display file folder path
-        self.selected_folder_label_sar.setGeometry(280, 50, 500, 23)
-        self.selected_folder_label_sar.setObjectName("selectedFolderLabel")
+        self.selected_folder_label_tir.setGeometry(280, 50, 500, 23)
+        self.selected_folder_label_tir.setObjectName("selectedFolderLabel")
         # Browse rgb button
-        self.browse_button_sar.setGeometry(790, 50, 85, 23)
-        self.browse_button_sar.setStyleSheet("font-size:14px")
-        self.browse_button_sar.clicked.connect(self.pick_new_sar)
+        self.browse_button_tir.setGeometry(790, 50, 85, 23)
+        self.browse_button_tir.setStyleSheet("font-size:14px")
+        self.browse_button_tir.clicked.connect(self.pick_new_tir)
 
         # Save annotated file folder settings
         # Select file prompt title
@@ -3658,7 +3658,7 @@ class Annotation_window(QWidget):
             # Update the current buffer and display the image and related information
             self.update_current_variable()
             self.display_rgb()
-            self.display_sar()
+            self.display_tir()
             self.display_attribution()
             # self.display_current_annotation()
 
@@ -3671,40 +3671,40 @@ class Annotation_window(QWidget):
         if folder_path:
             self.selected_folder_label_rgb.setText(folder_path)
             self.selected_folder_rgb = folder_path
-            if len(self.sar_name) > 0:
+            if len(self.tir_name) > 0:
                 # This step needs to be modified according to different image naming conventions
-                self.rgb_name = self.sar_name
+                self.rgb_name = self.tir_name
             else:
                 _, self.rgb_name = get_img_paths(
                     self.selected_folder_rgb
                 )  # Get the path of the image file, return a list
-            self.rgb_name = [name for name in self.rgb_name if "sar" not in name]
+            self.rgb_name = [name for name in self.rgb_name if "tir" not in name]
             self.img_paths_rgb = [
                 os.path.join(self.selected_folder_rgb, name) for name in self.rgb_name
             ]  # Get the path of the image file, return a list
             self.num_rgb = len(self.img_paths_rgb)
 
-    def pick_new_sar(self):
+    def pick_new_tir(self):
         """
         shows a dialog to choose folder with images to label
         """
         dialog = QFileDialog()
         folder_path = dialog.getExistingDirectory(None, "Select Folder")
         if folder_path:
-            self.selected_folder_label_sar.setText(folder_path)
-            self.selected_folder_sar = folder_path
+            self.selected_folder_label_tir.setText(folder_path)
+            self.selected_folder_tir = folder_path
             # Ensure the order of images in the folder is consistent
             if len(self.rgb_name) > 0:
-                self.sar_name = self.rgb_name
+                self.tir_name = self.rgb_name
             else:
-                _, self.sar_name = get_img_paths(
-                    self.selected_folder_sar
+                _, self.tir_name = get_img_paths(
+                    self.selected_folder_tir
                 )  # Get the path of the image file, return a list
-            self.sar_name = [name for name in self.sar_name if "rgb" not in name]
-            self.img_paths_sar = [
-                os.path.join(self.selected_folder_sar, name) for name in self.sar_name
+            self.tir_name = [name for name in self.tir_name if "rgb" not in name]
+            self.img_paths_tir = [
+                os.path.join(self.selected_folder_tir, name) for name in self.tir_name
             ]  # Get the path of the image file, return a list
-            self.num_sar = len(self.img_paths_sar)
+            self.num_tir = len(self.img_paths_tir)
 
     # Display rgb image and related information
 
@@ -3728,28 +3728,28 @@ class Annotation_window(QWidget):
             self.progress_bar_rgb.setText(f"{self.counter+1} of {self.num_rgb}")
             print(" ")
 
-    # Display sar image and related information
-    def display_sar(self):
+    # Display tir image and related information
+    def display_tir(self):
         if (
-            os.path.exists(self.selected_folder_sar)
-            and len(self.img_paths_sar) > self.counter
+            os.path.exists(self.selected_folder_tir)
+            and len(self.img_paths_tir) > self.counter
         ):
-            self.set_image_sar(self.img_paths_sar[self.counter])  # Display the first image
-            self.image_box_sar.setGeometry(
+            self.set_image_tir(self.img_paths_tir[self.counter])  # Display the first image
+            self.image_box_tir.setGeometry(
                 20 + self.img_panel_width,
                 145,
                 self.img_panel_width,
                 self.img_panel_height,
             )
-            self.image_box_sar.setAlignment(Qt.AlignTop)
+            self.image_box_tir.setAlignment(Qt.AlignTop)
             # Display the address of the current image, set it to be copyable
-            self.sar_name_label.setGeometry(20 + self.img_panel_width, 120, 400, 20)
-            self.sar_name_label.setStyleSheet("font-weight:bold;font-size:14px")
-            self.sar_name_label.setText("Current SAR: " + self.sar_name[self.counter])
+            self.tir_name_label.setGeometry(20 + self.img_panel_width, 120, 400, 20)
+            self.tir_name_label.setStyleSheet("font-weight:bold;font-size:14px")
+            self.tir_name_label.setText("Current SAR: " + self.tir_name[self.counter])
             # Display progress
-            self.progress_bar_sar.setGeometry(350 + self.img_panel_width, 120, 100, 20)
-            self.progress_bar_sar.setStyleSheet("font-weight:bold;font-size:14px")
-            self.progress_bar_sar.setText(f"{self.counter+1} of {self.num_sar}")
+            self.progress_bar_tir.setGeometry(350 + self.img_panel_width, 120, 100, 20)
+            self.progress_bar_tir.setStyleSheet("font-weight:bold;font-size:14px")
+            self.progress_bar_tir.setText(f"{self.counter+1} of {self.num_tir}")
 
     # Display the next image and update the related parameters
 
@@ -3762,7 +3762,7 @@ class Annotation_window(QWidget):
                 self.counter += 1
                 self.update_current_variable()  # update parameters
                 self.display_rgb()
-                self.display_sar()
+                self.display_tir()
                 self.init_pannel()
                 # self.display_current_annotation()
                 self.display_attribution()
@@ -3781,7 +3781,7 @@ class Annotation_window(QWidget):
                 self.counter -= 1
                 self.update_current_variable()
                 self.display_rgb()
-                self.display_sar()
+                self.display_tir()
                 self.init_pannel()
                 # self.display_current_annotation()
                 self.display_attribution()
@@ -3814,13 +3814,13 @@ class Annotation_window(QWidget):
 
         self.image_box_rgb.setPixmap(pixmap)
 
-    def set_image_sar(self, path_sar):
+    def set_image_tir(self, path_tir):
         """
         displays the image in GUI
         :param path: relative path to the image that should be show
         """
 
-        pixmap = QPixmap(path_sar)
+        pixmap = QPixmap(path_tir)
 
         # get original image dimensions
         img_width = pixmap.width()
@@ -3834,7 +3834,7 @@ class Annotation_window(QWidget):
         else:
             pixmap = pixmap.scaledToHeight(self.img_panel_height - margin)
 
-        self.image_box_sar.setPixmap(pixmap)
+        self.image_box_tir.setPixmap(pixmap)
 
     # Add answers to buffer first, then write all at once, can only modify in buffer
     # How to handle modifications: first load image annotations into buffer
@@ -3860,11 +3860,11 @@ class Annotation_window(QWidget):
     def submit_annotation(self):
 
         if len(self.current_qst_dict) > 0 and len(self.current_attri_dict) > 0:
-            if self.current_rgb_name == self.current_sar_name:
-                # self.annotation_dict[self.current_sar_name] = self.current_qst_dict
-                self.attribution_dict[self.current_sar_name] = self.current_attri_dict
-                # self.annotation_dict[self.current_sar_name] = self.current_qst_dict
-                # self.attribution_dict[self.current_sar_name] = self.current_attri_dict
+            if self.current_rgb_name == self.current_tir_name:
+                # self.annotation_dict[self.current_tir_name] = self.current_qst_dict
+                self.attribution_dict[self.current_tir_name] = self.current_attri_dict
+                # self.annotation_dict[self.current_tir_name] = self.current_qst_dict
+                # self.attribution_dict[self.current_tir_name] = self.current_attri_dict
                 self.generate_annotation()
                 self.display_anno.clear()
                 self.display_anno.append("Annotation submitted and generated successfully")
@@ -3943,13 +3943,13 @@ class Annotation_window(QWidget):
     # After switching images, update the related variables
     def update_current_variable(self):
 
-        if len(self.rgb_name) > self.counter and len(self.sar_name) > self.counter:
+        if len(self.rgb_name) > self.counter and len(self.tir_name) > self.counter:
             self.current_rgb_name = self.rgb_name[self.counter]
-            self.current_sar_name = self.sar_name[self.counter]
-        if self.current_rgb_name == self.current_sar_name:
+            self.current_tir_name = self.tir_name[self.counter]
+        if self.current_rgb_name == self.current_tir_name:
             if len(self.annotation_dict) > 0:
                 if self.current_rgb_name in self.annotation_dict:
-                    self.current_qst_dict = self.annotation_dict[self.current_sar_name]
+                    self.current_qst_dict = self.annotation_dict[self.current_tir_name]
                 else:
                     self.current_qst_dict = {}
 
@@ -3957,7 +3957,7 @@ class Annotation_window(QWidget):
             if len(self.attribution_dict) > 0:
                 if self.current_rgb_name in self.attribution_dict:
                     self.current_attri_dict = self.attribution_dict[
-                        self.current_sar_name
+                        self.current_tir_name
                     ]
                     if self.contain_dict is not None:
                         if "PresContain" in self.current_attri_dict:
