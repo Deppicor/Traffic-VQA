@@ -13,6 +13,8 @@
 
 Unmanned Aerial Vehicles (UAVs) provide crucial aerial perspectives for traffic surveillance. However, deriving crucial cognitive insights from UAV imagery, like identifying traffic violations and safety risks using Visual Question Answering (VQA), is limited by existing datasets, which often lack the required diversity, cognitive depth, and all-weather multimodal capabilities. To bridge this gap, we introduce **Traffic-VQA**, a large-scale benchmark of 8,180 aligned optical-thermal UAV image pairs and 1.3 million question-answer pairs, with an average of approximately 159 questions per image pair. This dataset encompasses 31 distinct question types, including 10 question types dedicated to complex cognitive reasoning and 15 types focused on fundamental perception, all specifically engineered to evaluate and advance understanding in challenging traffic scenarios including nighttime and adverse weather. The proposed Traffic-VQA is constructed using a novel human-LLM semi-automated annotation pipeline, ensuring both scale and cognitively rich content. It serves as a robust platform for benchmarking diverse Multimodal Large Language Models (MLLMs) and VQA models. To effectively assess the diverse and open-ended answers, we propose L3-Lite, a lightweight LLM-based metric for effective free-form QA evaluation. Extensive benchmarks demonstrate Traffic-VQA's utility in assessing cognitive capacities for complex traffic, highlighting multimodal robustness and revealing higher-order reasoning limitations in current models. The proposed dataset provides a valuable resource for developing and evaluating the next generation of all-weather, cognitive traffic monitoring systems powered by advanced visual understanding.
 
+<img src="Traffic-VQA.png" alt="Illustration of Traffic-VQA" style="zoom:67%;" />
+
 ## 🌟 Key Features
 
 *   **Large-Scale:** Comprises a significant number of question-answer pairs, images, and videos.
@@ -26,7 +28,7 @@ Unmanned Aerial Vehicles (UAVs) provide crucial aerial perspectives for traffic 
 
 *   **[May, 2025]** Traffic-VQA dataset and annotations are now open-sourced on [🤗 Hugging Face Datasets](https://huggingface.co/datasets/YuYu2004/Traffic-VQA)!
 
-## 📊 Dataset Overview
+<--## 📊 Dataset Overview
 
 *(Consider adding a small, compelling image or GIF here showing an example from your dataset: e.g., a split view of optical/thermal with a sample question)*
 
@@ -35,7 +37,7 @@ Unmanned Aerial Vehicles (UAVs) provide crucial aerial perspectives for traffic 
 *   **Question:** "If the red car continues at its current speed, will it likely need to brake for the pedestrian crossing the street in the thermal view?"
 *   **Answer:** "Yes, the pedestrian is not clearly visible in the optical view due to poor lighting, but the thermal signature indicates their presence and trajectory, suggesting the car will need to brake."
 
-(Add more details about dataset splits - train/val/test, number of images, QAs, etc. if you wish)
+(Add more details about dataset splits - train/val/test, number of images, QAs, etc. if you wish)-->
 
 ## 🚀 Getting Started
 
